@@ -240,19 +240,6 @@ impl Editor {
         });
     }
 
-    /// Reads `g:{name}`, returning `Null` if it is not defined.
-    pub async fn get_var(&self, name: &str) -> Value {
-        self.request("nvim_get_var", vec![name.into()])
-            .await
-            .unwrap_or(Value::Null)
-    }
-
-    pub async fn set_var(&self, name: &str, value: Value) {
-        if let Err(err) = self.request("nvim_set_var", vec![name.into(), value]).await {
-            error!(LOG, "set g:{name} failed: {err}");
-        }
-    }
-
     pub fn echo_error(&self, msg: &str) {
         let lines: Vec<Value> = msg.lines().map(Value::from).collect();
         self.call_detached(

@@ -2,6 +2,7 @@
 #![allow(clippy::await_holding_lock)]
 
 use super::*;
+use crate::config::{parse_port, truthy, var_string, Config};
 use crate::editor::tests::FakeEditor;
 use axum::body::to_bytes;
 use futures_util::StreamExt;
@@ -54,20 +55,14 @@ impl Drop for TempDir {
     }
 }
 
-/// An nvim with the global variables in `vars` and the buffers in
-/// `buffers` (bufnr, directory of its file). `mkdp#util#preview_data`
-/// answers `{"bufnr": n, "seq": <how many times it was called>}`.
-fn fake(vars: Value, buffers: Vec<(i64, PathBuf)>) -> FakeEditor {
+/// An nvim with the buffers in `buffers` (bufnr, directory of its file).
+/// `mkdp#util#preview_data` answers `{"bufnr": n, "seq": <how many times it
+/// was called>}`.
+fn fake(buffers: Vec<(i64, PathBuf)>) -> FakeEditor {
     let seq = AtomicUsize::new(0);
     FakeEditor::new(move |call| {
         let args = &call.args;
         match call.method.as_str() {
-            "nvim_get_var" => {
-                let name = args[0].as_str().unwrap();
-                vars.get(name)
-                    .cloned()
-                    .ok_or_else(|| format!("Key not found: {name}"))
-            }
             "nvim_call_function" => {
                 let func_args = args[1].as_array().unwrap();
                 let bufnr = |arg: &Value| {
@@ -97,8 +92,48 @@ fn fake(vars: Value, buffers: Vec<(i64, PathBuf)>) -> FakeEditor {
     })
 }
 
-fn test_app(editor: &FakeEditor) -> Arc<App> {
-    App::new(editor.editor.clone(), false, 4321, None)
+fn test_app(config: Config, editor: &FakeEditor) -> Arc<App> {
+    App::new(config, editor.editor.clone(), 4321, None)
+}
+
+/// A Config with the values the tests used to set as editor vars.
+fn config_from(vars: Value) -> Config {
+    let mut config = Config::default();
+    if let Some(v) = vars.get("mkdp_open_to_the_world") {
+        config.open_to_the_world = truthy(v);
+    }
+    if let Some(v) = vars.get("mkdp_port") {
+        config.port = parse_port(v);
+    }
+    if let Some(v) = vars.get("mkdp_browserfunc") {
+        config.browserfunc = Some(var_string(v.clone())).filter(|f| !f.is_empty());
+    }
+    if let Some(v) = vars.get("mkdp_open_ip") {
+        config.open_ip = Some(var_string(v.clone())).filter(|f| !f.is_empty());
+    }
+    if let Some(v) = vars.get("mkdp_echo_preview_url") {
+        config.echo_preview_url = truthy(v);
+    }
+    if let Some(v) = vars.get("mkdp_combine_preview") {
+        config.combine_preview = truthy(v);
+    }
+    if let Some(v) = vars.get("mkdp_images_path") {
+        config.images_path =
+            Some(PathBuf::from(var_string(v.clone()))).filter(|p| !p.as_os_str().is_empty());
+    }
+    if let Some(v) = vars.get("mkdp_markdown_css") {
+        config.markdown_css =
+            Some(PathBuf::from(var_string(v.clone()))).filter(|p| !p.as_os_str().is_empty());
+    }
+    if let Some(v) = vars.get("mkdp_highlight_css") {
+        config.highlight_css =
+            Some(PathBuf::from(var_string(v.clone()))).filter(|p| !p.as_os_str().is_empty());
+    }
+    if let Some(v) = vars.get("mkdp_theme_css") {
+        config.theme_css =
+            Some(PathBuf::from(var_string(v.clone()))).filter(|p| !p.as_os_str().is_empty());
+    }
+    config
 }
 
 async fn get(app: &Arc<App>, path: &str, referer: Option<&str>) -> (StatusCode, String, Vec<u8>) {
@@ -133,60 +168,6 @@ async fn wait_for<T>(mut check: impl FnMut() -> Option<T>) -> T {
         }
         assert!(tokio::time::Instant::now() < deadline, "timed out");
         tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-}
-
-#[test]
-fn truthy_follows_vim_semantics() {
-    for value in [
-        json!(1),
-        json!(-1),
-        json!(0.5),
-        json!("1"),
-        json!("yes"),
-        json!(true),
-    ] {
-        assert!(truthy(&value), "{value}");
-    }
-    for value in [
-        json!(0),
-        json!(0.0),
-        json!(""),
-        json!("0"),
-        json!(false),
-        json!(null),
-        json!([1]),
-    ] {
-        assert!(!truthy(&value), "{value}");
-    }
-}
-
-#[test]
-fn var_string_returns_strings_verbatim() {
-    assert_eq!(var_string(json!("Open Me")), "Open Me");
-    assert_eq!(var_string(json!(null)), "");
-    assert_eq!(var_string(json!(12)), "12");
-}
-
-#[test]
-fn parse_port_accepts_numbers_and_strings() {
-    assert_eq!(parse_port(&json!(8080)), Some(8080));
-    assert_eq!(parse_port(&json!("8080")), Some(8080));
-    assert_eq!(parse_port(&json!(" 9000 ")), Some(9000));
-    assert_eq!(parse_port(&json!(65535)), Some(65535));
-    for value in [
-        json!(0),
-        json!("0"),
-        json!(""),
-        json!(65536),
-        json!(-1),
-        json!("80 80"),
-        json!("port"),
-        json!(true),
-        json!(null),
-        json!(80.5),
-    ] {
-        assert_eq!(parse_port(&value), None, "{value}");
     }
 }
 
@@ -291,9 +272,9 @@ async fn bind_is_local_unless_open_to_the_world() {
 
 #[tokio::test]
 async fn bare_bufnr_redirects_to_its_page() {
-    let editor = fake(json!({}), vec![]);
+    let editor = fake(vec![]);
     let res = route(
-        State(test_app(&editor)),
+        State(test_app(Config::default(), &editor)),
         Request::builder().uri("/12").body(Body::empty()).unwrap(),
     )
     .await;
@@ -303,7 +284,7 @@ async fn bare_bufnr_redirects_to_its_page() {
 
 #[tokio::test]
 async fn pages_serve_the_index() {
-    let app = test_app(&fake(json!({}), vec![]));
+    let app = test_app(Config::default(), &fake(vec![]));
     let index = embedded_file("index.html");
     for path in ["/", "/page/3", "/page/3?x=1"] {
         let (status, content_type, body) = get(&app, path, None).await;
@@ -321,7 +302,7 @@ async fn pages_serve_the_index() {
 
 #[tokio::test]
 async fn unknown_paths_are_404() {
-    let app = test_app(&fake(json!({}), vec![]));
+    let app = test_app(Config::default(), &fake(vec![]));
     let (status, content_type, body) = get(&app, "/no/such/file.js", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(content_type.starts_with("text/html"), "{content_type}");
@@ -330,7 +311,7 @@ async fn unknown_paths_are_404() {
 
 #[tokio::test]
 async fn embedded_assets_are_served() {
-    let app = test_app(&fake(json!({}), vec![]));
+    let app = test_app(Config::default(), &fake(vec![]));
     let (status, content_type, body) = get(&app, "/_static/favicon.ico", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("image/"), "{content_type}");
@@ -342,14 +323,14 @@ async fn custom_css_replaces_the_embedded_css() {
     let tmp = TempDir::new();
     let markdown = tmp.file("my markdown.css", b"body { color: red }");
     let highlight = tmp.file("hl.css", b".hljs { color: blue }");
-    let editor = fake(
-        json!({
+    let editor = fake(vec![]);
+    let app = test_app(
+        config_from(json!({
             "mkdp_markdown_css": markdown.to_string_lossy(),
             "mkdp_highlight_css": highlight.to_string_lossy(),
-        }),
-        vec![],
+        })),
+        &editor,
     );
-    let app = test_app(&editor);
     for (path, expected) in [
         ("/_static/markdown.css", "body { color: red }"),
         ("/_static/highlight.css", ".hljs { color: blue }"),
@@ -365,11 +346,11 @@ async fn custom_css_replaces_the_embedded_css() {
 async fn css_falls_back_to_the_embedded_file() {
     let tmp = TempDir::new();
     // unset, and set to a file that does not exist
-    let editor = fake(
-        json!({ "mkdp_highlight_css": tmp.0.join("missing.css").to_string_lossy() }),
-        vec![],
+    let editor = fake(vec![]);
+    let app = test_app(
+        config_from(json!({ "mkdp_highlight_css": tmp.0.join("missing.css").to_string_lossy() })),
+        &editor,
     );
-    let app = test_app(&editor);
     for name in ["markdown.css", "highlight.css"] {
         let (status, content_type, body) = get(&app, &format!("/_static/{name}"), None).await;
         assert_eq!(status, StatusCode::OK, "{name}");
@@ -409,7 +390,7 @@ async fn theme_css_is_empty_without_a_theme() {
         json!({}),
         json!({ "mkdp_theme_css": tmp.0.join("missing.css").to_string_lossy() }),
     ] {
-        let app = test_app(&fake(vars.clone(), vec![]));
+        let app = test_app(config_from(vars.clone()), &fake(vec![]));
         let (status, content_type, body) = get(&app, "/_theme/theme.css", None).await;
         assert_eq!(status, StatusCode::OK, "{vars}");
         assert_eq!(content_type, "text/css", "{vars}");
@@ -424,10 +405,10 @@ async fn theme_css_and_its_fonts_are_served() {
     tmp.file("theme/fonts/My Font.woff2", b"woff2 bytes");
     tmp.file("theme/notes.txt", b"secret");
     tmp.file("outside.woff2", b"outside");
-    let app = test_app(&fake(
-        json!({ "mkdp_theme_css": theme.to_string_lossy() }),
-        vec![],
-    ));
+    let app = test_app(
+        config_from(json!({ "mkdp_theme_css": theme.to_string_lossy() })),
+        &fake(vec![]),
+    );
 
     let (status, content_type, body) = get(&app, "/_theme/theme.css", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -461,8 +442,8 @@ async fn local_image_is_relative_to_the_buffer() {
     let tmp = TempDir::new();
     let docs = tmp.dir("docs");
     tmp.file("docs/img/a.png", b"png bytes");
-    let editor = fake(json!({}), vec![(3, docs)]);
-    let app = test_app(&editor);
+    let editor = fake(vec![(3, docs)]);
+    let app = test_app(Config::default(), &editor);
 
     let (status, content_type, body) = get(&app, "/_assets/img/a.png", PAGE_3).await;
     assert_eq!(status, StatusCode::OK);
@@ -485,11 +466,15 @@ async fn local_image_uses_mkdp_images_path() {
     tmp.file("docs/a.png", b"next to the buffer");
     let assets = tmp.dir("assets");
     tmp.file("assets/a.png", b"from images path");
-    let editor = fake(
-        json!({ "mkdp_images_path": assets.to_string_lossy() }),
-        vec![(3, docs)],
-    );
-    let (status, _, body) = get(&test_app(&editor), "/_assets/a.png", PAGE_3).await;
+    let (status, _, body) = get(
+        &test_app(
+            config_from(json!({ "mkdp_images_path": assets.to_string_lossy() })),
+            &fake(vec![(3, docs)]),
+        ),
+        "/_assets/a.png",
+        PAGE_3,
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, b"from images path");
 }
@@ -499,7 +484,7 @@ async fn local_image_decodes_the_path() {
     let tmp = TempDir::new();
     let docs = tmp.dir("docs");
     tmp.file("docs/my pic.jpg", b"jpeg bytes");
-    let app = test_app(&fake(json!({}), vec![(3, docs)]));
+    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
     for path in [
         "/_assets/my%20pic.jpg",
         // encoded by the page and again by the browser
@@ -519,7 +504,7 @@ async fn local_image_rooted_path_is_found_in_an_ancestor() {
     let tmp = TempDir::new();
     let sub = tmp.dir("project/docs/sub");
     tmp.file("project/images/mkdp-test-logo.svg", b"<svg/>");
-    let app = test_app(&fake(json!({}), vec![(3, sub)]));
+    let app = test_app(Config::default(), &fake(vec![(3, sub)]));
     let (status, content_type, body) =
         get(&app, "/_assets//images/mkdp-test-logo.svg", PAGE_3).await;
     assert_eq!(status, StatusCode::OK);
@@ -532,7 +517,7 @@ async fn local_image_absolute_path_inside_the_buffer_dir() {
     let tmp = TempDir::new();
     let docs = tmp.dir("docs");
     let image = tmp.file("docs/a.gif", b"gif bytes");
-    let app = test_app(&fake(json!({}), vec![(3, docs)]));
+    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
     let path = format!("/_assets/{}", image.to_string_lossy());
     let (status, content_type, body) = get(&app, &path, PAGE_3).await;
     assert_eq!(status, StatusCode::OK);
@@ -545,7 +530,7 @@ async fn local_image_needs_an_existing_buffer() {
     let tmp = TempDir::new();
     let docs = tmp.dir("docs");
     tmp.file("docs/a.png", b"png bytes");
-    let app = test_app(&fake(json!({}), vec![(3, docs)]));
+    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
 
     let (status, _, _) = get(&app, "/_assets/a.png", PAGE_3).await;
     assert_eq!(status, StatusCode::OK, "control request");
@@ -564,7 +549,7 @@ async fn local_image_missing_file_is_404() {
     let tmp = TempDir::new();
     let docs = tmp.dir("docs");
     tmp.file("docs/a.png", b"png bytes");
-    let app = test_app(&fake(json!({}), vec![(3, docs)]));
+    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
     let (status, _, _) = get(&app, "/_assets/a.png", PAGE_3).await;
     assert_eq!(status, StatusCode::OK, "control request");
     let (status, _, body) = get(&app, "/_assets/b.png", PAGE_3).await;
@@ -582,7 +567,7 @@ async fn local_image_only_serves_images() {
     tmp.file("docs/a.png", b"png bytes");
     let secret = TempDir::new();
     let secret_file = secret.file("id_rsa", b"PRIVATE KEY");
-    let app = test_app(&fake(json!({}), vec![(3, docs)]));
+    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
 
     let (status, _, _) = get(&app, "/_assets/a.png", PAGE_3).await;
     assert_eq!(status, StatusCode::OK, "control request");
@@ -603,7 +588,7 @@ async fn local_image_does_not_traverse_to_non_images() {
     let docs = tmp.dir("project/docs");
     tmp.file("project/images/a.png", b"png bytes");
     tmp.file("secret.txt", b"TOKEN=hunter2");
-    let app = test_app(&fake(json!({}), vec![(3, docs)]));
+    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
 
     // `../images/a.png` is an ordinary markdown image link
     let (status, _, body) = get(&app, "/_assets/../images/a.png", PAGE_3).await;
@@ -624,10 +609,10 @@ type Ws =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 /// Serves `app`'s router on the port it was created with.
-async fn serve(editor: &FakeEditor, open_to_the_world: bool) -> Arc<App> {
+async fn serve(config: Config, editor: &FakeEditor) -> Arc<App> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let app = App::new(editor.editor.clone(), open_to_the_world, port, None);
+    let app = App::new(config, editor.editor.clone(), port, None);
     let router = router(app.clone());
     tokio::spawn(async move { axum::serve(listener, router).await });
     app
@@ -665,18 +650,9 @@ fn notifier(app: &Arc<App>) -> mpsc::UnboundedSender<(String, Value)> {
     tx
 }
 
-fn set_var_calls(editor: &FakeEditor, name: &str) -> Vec<Value> {
-    editor
-        .calls()
-        .into_iter()
-        .filter(|c| c.method == "nvim_set_var" && c.args[0] == name)
-        .map(|c| c.args[1].clone())
-        .collect()
-}
-
 #[tokio::test]
 async fn websocket_needs_a_bufnr() {
-    let app = serve(&fake(json!({}), vec![]), false).await;
+    let app = serve(Config::default(), &fake(vec![])).await;
     let url = format!("ws://127.0.0.1:{}/ws", app.port);
     match tokio_tungstenite::connect_async(url).await {
         Err(tungstenite::Error::Http(res)) => assert_eq!(res.status(), StatusCode::BAD_REQUEST),
@@ -686,7 +662,7 @@ async fn websocket_needs_a_bufnr() {
 
 #[tokio::test]
 async fn websocket_rejects_other_web_sites() {
-    let app = serve(&fake(json!({}), vec![(3, PathBuf::new())]), false).await;
+    let app = serve(Config::default(), &fake(vec![(3, PathBuf::new())])).await;
     let url = format!("ws://127.0.0.1:{}/ws?path=/page/3", app.port);
     let mut req = tungstenite::client::IntoClientRequest::into_client_request(url).unwrap();
     req.headers_mut().insert(
@@ -701,7 +677,7 @@ async fn websocket_rejects_other_web_sites() {
 
 #[tokio::test]
 async fn websocket_accepts_the_page_origin() {
-    let app = serve(&fake(json!({}), vec![(3, PathBuf::new())]), false).await;
+    let app = serve(Config::default(), &fake(vec![(3, PathBuf::new())])).await;
     let url = format!("ws://127.0.0.1:{}/ws?path=/page/3", app.port);
     let mut req = tungstenite::client::IntoClientRequest::into_client_request(url).unwrap();
     let origin = format!("http://127.0.0.1:{}", app.port);
@@ -716,10 +692,17 @@ async fn open_to_the_world_needs_the_token() {
     let tmp = TempDir::new();
     let docs = tmp.dir("docs");
     tmp.file("docs/a.png", b"png bytes");
-    let app = serve(&fake(json!({}), vec![(3, docs)]), true).await;
+    let app = serve(
+        config_from(json!({ "mkdp_open_to_the_world": 1 })),
+        &fake(vec![(3, docs)]),
+    )
+    .await;
     let token = app.token.clone();
     assert_eq!(token.len(), 32);
-    assert_ne!(token, App::new(app.editor.clone(), true, 1, None).token);
+    assert_ne!(
+        token,
+        App::new(Config::default(), app.editor.clone(), 1, None).token
+    );
 
     for path in [
         "/page/3",
@@ -791,8 +774,12 @@ async fn open_to_the_world_needs_the_token() {
 
 #[tokio::test]
 async fn localhost_needs_no_token() {
-    let editor = fake(json!({ "mkdp_browserfunc": "OpenPreview" }), vec![]);
-    let app = serve(&editor, false).await;
+    let editor = fake(vec![]);
+    let app = serve(
+        config_from(json!({ "mkdp_browserfunc": "OpenPreview" })),
+        &editor,
+    )
+    .await;
     let (status, _, _) = get(&app, "/page/3", None).await;
     assert_eq!(status, StatusCode::OK);
     notifier(&app)
@@ -808,15 +795,11 @@ async fn localhost_needs_no_token() {
 
 #[tokio::test]
 async fn close_page_only_closes_that_buffers_pages() {
-    let editor = fake(json!({}), vec![]);
-    let app = serve(&editor, false).await;
+    let editor = fake(vec![]);
+    let app = serve(Config::default(), &editor).await;
     let mut page3 = connect(&app, 3).await;
     let mut other3 = connect(&app, 3).await;
     let mut page4 = connect(&app, 4).await;
-    assert_eq!(
-        set_var_calls(&editor, "mkdp_clients_active").last(),
-        Some(&json!(1))
-    );
 
     let notify = notifier(&app);
     notify
@@ -842,16 +825,12 @@ async fn close_page_only_closes_that_buffers_pages() {
         next_json(&mut page4).await,
         Some(json!({ "type": "close_page" }))
     );
-    wait_for(|| {
-        (set_var_calls(&editor, "mkdp_clients_active").last() == Some(&json!(0))).then_some(())
-    })
-    .await;
 }
 
 #[tokio::test]
 async fn close_all_pages_closes_every_page() {
-    let editor = fake(json!({}), vec![]);
-    let app = serve(&editor, false).await;
+    let editor = fake(vec![]);
+    let app = serve(Config::default(), &editor).await;
     let mut page3 = connect(&app, 3).await;
     let mut page4 = connect(&app, 4).await;
     app.close_all_pages().await;
@@ -865,8 +844,8 @@ async fn close_all_pages_closes_every_page() {
 
 #[tokio::test]
 async fn repeated_refreshes_are_collapsed() {
-    let editor = fake(json!({}), vec![]);
-    let app = serve(&editor, false).await;
+    let editor = fake(vec![]);
+    let app = serve(Config::default(), &editor).await;
     let mut page3 = connect(&app, 3).await;
     let mut page4 = connect(&app, 4).await;
     assert_eq!(editor.function_calls("mkdp#util#preview_data").len(), 2);
@@ -896,8 +875,12 @@ async fn repeated_refreshes_are_collapsed() {
 
 #[tokio::test]
 async fn open_browser_calls_browserfunc_with_the_page_url() {
-    let editor = fake(json!({ "mkdp_browserfunc": "OpenPreview" }), vec![]);
-    let app = serve(&editor, false).await;
+    let editor = fake(vec![]);
+    let app = serve(
+        config_from(json!({ "mkdp_browserfunc": "OpenPreview" })),
+        &editor,
+    )
+    .await;
     notifier(&app)
         .send(("open_browser".into(), json!([{ "bufnr": 7 }])))
         .unwrap();
@@ -910,16 +893,18 @@ async fn open_browser_calls_browserfunc_with_the_page_url() {
 
 #[tokio::test]
 async fn open_browser_uses_mkdp_open_ip_and_echoes_the_url() {
-    let editor = fake(
-        json!({
+    let editor = fake(vec![]);
+    // open_ip wins over the address picked for open_to_the_world
+    let app = serve(
+        config_from(json!({
             "mkdp_browserfunc": "OpenPreview",
             "mkdp_open_ip": "192.0.2.7",
             "mkdp_echo_preview_url": 1,
-        }),
-        vec![],
-    );
-    // open_ip wins over the address picked for open_to_the_world
-    let app = serve(&editor, true).await;
+            "mkdp_open_to_the_world": 1,
+        })),
+        &editor,
+    )
+    .await;
     notifier(&app)
         .send(("open_browser".into(), json!({ "bufnr": 2 })))
         .unwrap();
@@ -936,11 +921,12 @@ async fn open_browser_uses_mkdp_open_ip_and_echoes_the_url() {
 
 #[tokio::test]
 async fn combine_preview_reuses_a_connected_page() {
-    let editor = fake(
-        json!({ "mkdp_browserfunc": "OpenPreview", "mkdp_combine_preview": 1 }),
-        vec![],
-    );
-    let app = serve(&editor, false).await;
+    let editor = fake(vec![]);
+    let app = serve(
+        config_from(json!({ "mkdp_browserfunc": "OpenPreview", "mkdp_combine_preview": 1 })),
+        &editor,
+    )
+    .await;
     let notify = notifier(&app);
 
     // no page yet, so one is opened
@@ -964,16 +950,10 @@ async fn combine_preview_reuses_a_connected_page() {
 /// An nvim whose working directory is `root`, with the loaded buffers in
 /// `buffers` (bufnr, file). `mkdp#util#preview_data` answers `{"bufnr": n}`
 /// and `mkdp#util#file_preview_data` `{"file": path}`.
-fn fake_files(vars: Value, buffers: Vec<(i64, PathBuf)>) -> FakeEditor {
+fn fake_files(buffers: Vec<(i64, PathBuf)>) -> FakeEditor {
     FakeEditor::new(move |call| {
         let args = &call.args;
         match call.method.as_str() {
-            "nvim_get_var" => {
-                let name = args[0].as_str().unwrap();
-                vars.get(name)
-                    .cloned()
-                    .ok_or_else(|| format!("Key not found: {name}"))
-            }
             "nvim_call_function" => {
                 let func_args = args[1].as_array().unwrap();
                 let file = |arg: &Value| buffers.iter().find(|(n, _)| Some(*n) == arg.as_i64());
@@ -1001,10 +981,10 @@ fn fake_files(vars: Value, buffers: Vec<(i64, PathBuf)>) -> FakeEditor {
 }
 
 /// Serves `editor` with `root` as the editor's working directory.
-async fn serve_root(editor: &FakeEditor, root: &Path) -> Arc<App> {
+async fn serve_root(config: Config, editor: &FakeEditor, root: &Path) -> Arc<App> {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let app = App::new(editor.editor.clone(), false, port, Some(root.into()));
+    let app = App::new(config, editor.editor.clone(), port, Some(root.into()));
     let router = router(app.clone());
     tokio::spawn(async move { axum::serve(listener, router).await });
     app
@@ -1028,7 +1008,7 @@ async fn files_urls_serve_markdown_under_the_root() {
     tmp.file("docs/pic.png", b"png bytes");
     tmp.file("notes.txt", b"not markdown");
     tmp.file(".env", b"TOKEN=hunter2");
-    let app = serve_root(&fake_files(json!({}), vec![]), &tmp.0).await;
+    let app = serve_root(Config::default(), &fake_files(vec![]), &tmp.0).await;
     let index = embedded_file("index.html");
 
     for path in ["/files/docs/a.md", "/files/docs/my%20file.md"] {
@@ -1067,8 +1047,8 @@ async fn files_urls_cannot_leave_the_root() {
         std::os::unix::fs::symlink(&outside, root.join("link.md")).unwrap();
         std::os::unix::fs::symlink(tmp.0.join("outside.png"), root.join("link.png")).unwrap();
     }
-    let editor = fake_files(json!({}), vec![]);
-    let app = serve_root(&editor, &root).await;
+    let editor = fake_files(vec![]);
+    let app = serve_root(Config::default(), &editor, &root).await;
 
     let (status, _, _) = get(&app, "/files/docs/a.md", None).await;
     assert_eq!(status, StatusCode::OK, "control request");
@@ -1108,8 +1088,8 @@ async fn files_urls_cannot_leave_the_root() {
 async fn files_page_shows_the_buffer_of_its_file() {
     let tmp = TempDir::new();
     let file = tmp.file("docs/a.md", b"# a");
-    let editor = fake_files(json!({}), vec![(5, file)]);
-    let app = serve_root(&editor, &tmp.0).await;
+    let editor = fake_files(vec![(5, file)]);
+    let app = serve_root(Config::default(), &editor, &tmp.0).await;
 
     let (mut page, data) = connect_page(&app, "/files/docs/a.md").await;
     assert_eq!(data, json!({ "bufnr": 5 }));
@@ -1127,8 +1107,8 @@ async fn files_page_shows_the_buffer_of_its_file() {
 async fn files_page_without_a_buffer_reads_the_file() {
     let tmp = TempDir::new();
     let file = tmp.file("docs/my file.md", b"# a");
-    let editor = fake_files(json!({}), vec![]);
-    let app = serve_root(&editor, &tmp.0).await;
+    let editor = fake_files(vec![]);
+    let app = serve_root(Config::default(), &editor, &tmp.0).await;
 
     let (_page, data) = connect_page(&app, "/files/docs/my%20file.md").await;
     let file = json!(file.to_string_lossy());
@@ -1144,7 +1124,7 @@ async fn local_image_is_relative_to_a_files_page() {
     let tmp = TempDir::new();
     tmp.file("docs/a.md", b"# a");
     tmp.file("docs/img/a.png", b"png bytes");
-    let app = serve_root(&fake_files(json!({}), vec![]), &tmp.0).await;
+    let app = serve_root(Config::default(), &fake_files(vec![]), &tmp.0).await;
     let referer = Some("http://localhost:4321/files/docs/a.md?x=1#top");
     let (status, _, body) = get(&app, "/_assets/img/a.png", referer).await;
     assert_eq!(status, StatusCode::OK);
@@ -1157,15 +1137,17 @@ async fn open_browser_opens_the_files_url_under_the_root() {
     let root = tmp.dir("root");
     let inside = tmp.file("root/docs/my file.md", b"# a");
     let outside = tmp.file("elsewhere/b.md", b"# b");
-    let editor = fake_files(
-        json!({ "mkdp_browserfunc": "OpenPreview" }),
-        vec![
-            (2, inside),
-            (3, outside),
-            (4, PathBuf::from("no such file.md")),
-        ],
-    );
-    let app = serve_root(&editor, &root).await;
+    let editor = fake_files(vec![
+        (2, inside),
+        (3, outside),
+        (4, PathBuf::from("no such file.md")),
+    ]);
+    let app = serve_root(
+        config_from(json!({ "mkdp_browserfunc": "OpenPreview" })),
+        &editor,
+        &root,
+    )
+    .await;
     let notify = notifier(&app);
     for bufnr in [2, 3, 4] {
         notify

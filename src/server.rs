@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Notify};
 
+use crate::config::{truthy, var_string, Config};
 use crate::editor::{Editor, Incoming};
 use crate::{error, info, opener};
 
@@ -53,6 +54,7 @@ struct Client {
 
 pub struct App {
     editor: Editor,
+    config: Config,
     /// Connected preview pages, keyed by what they show.
     clients: Mutex<HashMap<Target, Vec<Client>>>,
     next_client_id: AtomicU64,
@@ -67,11 +69,11 @@ pub struct App {
     root: Option<PathBuf>,
 }
 
-pub async fn run(editor: Editor, mut incoming: mpsc::UnboundedReceiver<Incoming>) {
-    let open_to_the_world = truthy(&editor.get_var("mkdp_open_to_the_world").await);
-    let preferred_port = parse_port(&editor.get_var("mkdp_port").await);
+pub async fn run(config: Config) {
+    // the bridge stays until Phase 3 for call/call_detached traffic
+    let (editor, mut incoming) = Editor::attach();
 
-    let listener = match bind(open_to_the_world, preferred_port).await {
+    let listener = match bind(config.open_to_the_world, config.port).await {
         Ok(listener) => listener,
         Err(err) => {
             error!(LOG, "failed to start server: {err}");
@@ -94,7 +96,7 @@ pub async fn run(editor: Editor, mut incoming: mpsc::UnboundedReceiver<Incoming>
         Ok(Value::String(cwd)) => Path::new(&cwd).canonicalize().ok(),
         _ => None,
     };
-    let app = App::new(editor.clone(), open_to_the_world, port, root);
+    let app = App::new(config, editor.clone(), port, root);
     let router = router(app.clone());
     tokio::spawn(async move {
         if let Err(err) = axum::serve(listener, router).await {
@@ -102,13 +104,6 @@ pub async fn run(editor: Editor, mut incoming: mpsc::UnboundedReceiver<Incoming>
         }
     });
 
-    if let Ok(api_info) = editor.request("nvim_get_api_info", vec![]).await {
-        if let Some(channel_id) = api_info.get(0) {
-            editor
-                .set_var("mkdp_node_channel_id", channel_id.clone())
-                .await;
-        }
-    }
     editor.call_detached("mkdp#util#open_browser", vec![]);
 
     // Requests block the editor until answered, so reply to them right away.
@@ -172,8 +167,10 @@ fn router(app: Arc<App>) -> Router {
 }
 
 impl App {
-    fn new(editor: Editor, open_to_the_world: bool, port: u16, root: Option<PathBuf>) -> Arc<App> {
+    fn new(config: Config, editor: Editor, port: u16, root: Option<PathBuf>) -> Arc<App> {
+        let open_to_the_world = config.open_to_the_world;
         Arc::new(App {
+            config,
             editor,
             clients: Mutex::new(HashMap::new()),
             next_client_id: AtomicU64::new(1),
@@ -249,7 +246,6 @@ impl App {
             .entry(target)
             .or_default()
             .push(Client { id, tx });
-        self.update_clients_active().await;
 
         // the map holds the only sender, so removing the client ends the loop
         // once its queued messages are sent
@@ -275,20 +271,6 @@ impl App {
         for clients in self.clients.lock().unwrap().values_mut() {
             clients.retain(|c| c.id != id);
         }
-        self.update_clients_active().await;
-    }
-
-    async fn update_clients_active(&self) {
-        let active = self
-            .clients
-            .lock()
-            .unwrap()
-            .values()
-            .flatten()
-            .any(|c| !c.tx.is_closed());
-        self.editor
-            .set_var("mkdp_clients_active", Value::from(i32::from(active)))
-            .await;
     }
 
     async fn preview_data(&self, bufnr: i64) -> Option<Value> {
@@ -365,7 +347,6 @@ impl App {
         info!(LOG, "close page: {bufnr}");
         self.broadcast(Some(bufnr), json!({ "type": "close_page" }));
         self.clients.lock().unwrap().remove(&Target::Buffer(bufnr));
-        self.update_clients_active().await;
     }
 
     async fn close_all_pages(&self) {
@@ -393,9 +374,8 @@ impl App {
 
     async fn open_browser(&self, bufnr: i64) {
         let editor = &self.editor;
-        let combine_preview = truthy(&editor.get_var("mkdp_combine_preview").await);
         let path = self.page_path(bufnr).await;
-        if combine_preview
+        if self.config.combine_preview
             && self.broadcast(
                 None,
                 json!({ "type": "change_bufnr", "bufnr": bufnr, "path": path }),
@@ -404,8 +384,7 @@ impl App {
             info!(LOG, "combine preview page: {bufnr}");
             return;
         }
-
-        let open_ip = var_string(editor.get_var("mkdp_open_ip").await);
+        let open_ip = self.config.open_ip.clone().unwrap_or_default();
         let host = if !open_ip.is_empty() {
             open_ip
         } else if self.open_to_the_world {
@@ -418,19 +397,18 @@ impl App {
             url.push_str(&format!("?token={}", self.token));
         }
 
-        let browserfunc = var_string(editor.get_var("mkdp_browserfunc").await);
-        if !browserfunc.is_empty() {
+        if let Some(browserfunc) = self.config.browserfunc.clone().filter(|f| !f.is_empty()) {
             info!(LOG, "open page [{browserfunc}]: {url}");
             editor.call_detached(&browserfunc, vec![url.clone().into()]);
         } else {
-            let browser = opener::Browser::from_var(&editor.get_var("mkdp_browser").await);
+            let browser = opener::Browser::from_var(&self.config.browser);
             info!(LOG, "open page [{browser:?}]: {url}");
             if let Err(msg) = opener::open(&url, &browser) {
                 error!(LOG, "{msg}");
                 editor.echo_error(&msg);
             }
         }
-        if truthy(&editor.get_var("mkdp_echo_preview_url").await) {
+        if self.config.echo_preview_url {
             editor.call_detached("mkdp#util#echo_url", vec![url.clone().into()]);
         }
         editor.call_detached("mkdp#util#call_hook", vec!["on_start".into(), url.into()]);
@@ -591,12 +569,12 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
         return theme_file(&app, file).await;
     }
     let custom_css = match path {
-        "/_static/markdown.css" => Some("mkdp_markdown_css"),
-        "/_static/highlight.css" => Some("mkdp_highlight_css"),
+        "/_static/markdown.css" => app.config.markdown_css.clone(),
+        "/_static/highlight.css" => app.config.highlight_css.clone(),
         _ => None,
     };
-    if let Some(var) = custom_css {
-        let css = var_string(app.editor.get_var(var).await);
+    if let Some(css) = custom_css {
+        let css = css.to_string_lossy().into_owned();
         if !css.is_empty() {
             match tokio::fs::read(&css).await {
                 Ok(bytes) => return file_response(&css, bytes),
@@ -633,7 +611,12 @@ async fn local_image(app: &App, target: Option<Target>, image: &str) -> Option<R
             return None;
         }
     }
-    let mut file_dir = var_string(editor.get_var("mkdp_images_path").await);
+    let mut file_dir = app
+        .config
+        .images_path
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     if file_dir.is_empty() {
         file_dir = match target {
             Target::Buffer(bufnr) => var_string(
@@ -696,7 +679,12 @@ async fn local_image(app: &App, target: Option<Target>, image: &str) -> Option<R
 }
 
 async fn theme_file(app: &App, file: &str) -> Response {
-    let theme = var_string(app.editor.get_var("mkdp_theme_css").await);
+    let theme = app
+        .config
+        .theme_css
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
     if file != "theme.css" {
         return theme_font(&theme, file).await.unwrap_or_else(not_found);
     }
@@ -883,33 +871,6 @@ fn file_response(path: &str, body: impl Into<Body>) -> Response {
         response.headers_mut().insert(header::CONTENT_TYPE, value);
     }
     response
-}
-
-/// vim booleans arrive as numbers, strings or bools depending on the config
-fn truthy(value: &Value) -> bool {
-    match value {
-        Value::Bool(b) => *b,
-        Value::Number(n) => n.as_f64().is_some_and(|n| n != 0.0),
-        Value::String(s) => !s.is_empty() && s != "0",
-        _ => false,
-    }
-}
-
-fn var_string(value: Value) -> String {
-    match value {
-        Value::String(s) => s,
-        Value::Null => String::new(),
-        other => other.to_string(),
-    }
-}
-
-fn parse_port(value: &Value) -> Option<u16> {
-    match value {
-        Value::Number(n) => n.as_u64().and_then(|n| u16::try_from(n).ok()),
-        Value::String(s) => s.trim().parse().ok(),
-        _ => None,
-    }
-    .filter(|&port| port != 0)
 }
 
 /// The address other machines on the network can reach us on. Connecting a

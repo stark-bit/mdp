@@ -41,6 +41,7 @@ struct Server {
     stdin: Option<ChildStdin>,
     messages: mpsc::Receiver<Message>,
     log: PathBuf,
+    config: PathBuf,
 }
 
 fn temp_path(name: &str) -> PathBuf {
@@ -57,13 +58,18 @@ fn temp_path(name: &str) -> PathBuf {
 }
 
 impl Server {
-    /// Starts the server like mkdp#rpc#start_server does.
+    /// Starts the server like mkdp#rpc#start_server does. The browser is
+    /// neutralized with a browserfunc the test answers instead.
     fn start(mode: Mode) -> Server {
         let log = temp_path("mkdp.log");
+        let config = temp_path("config.toml");
+        std::fs::write(&config, "browserfunc = \"MkdpTestOpen\"\n").unwrap();
         let mut command = Command::new(BIN);
         command
             .env("NVIM_MKDP_LOG_FILE", &log)
             .env_remove("NVIM_MKDP_LOG_LEVEL")
+            .arg("--config")
+            .arg(&config)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -85,6 +91,7 @@ impl Server {
             stdin,
             messages,
             log,
+            config,
         }
     }
 
@@ -208,6 +215,7 @@ impl Drop for Server {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.log);
+        let _ = std::fs::remove_file(&self.config);
     }
 }
 
@@ -312,7 +320,6 @@ fn editor(mode: Mode) -> impl Fn(&Request) -> Result<Value, String> {
                 Mode::Vim => Ok(Value::Null),
             },
         },
-        "nvim_get_api_info" => Ok(json!([42, { "functions": [] }])),
         "nvim_set_var" => Ok(Value::Null),
         "nvim_call_function" => Ok(Value::Null),
         method => panic!("unexpected request {method}"),
@@ -343,23 +350,10 @@ fn stdio_protocol(mode: Mode) {
 
     let open = server.serve_until(&mut seen, &editor, |r| is_call(r, "mkdp#util#open_browser"));
     assert_eq!(open.args, vec![json!("mkdp#util#open_browser"), json!([])]);
-    let var_reads: Vec<&Value> = seen
-        .iter()
-        .filter(|r| r.method == "nvim_get_var")
-        .map(|r| &r.args[0])
-        .collect();
-    assert!(var_reads.contains(&&json!("mkdp_port")), "{seen:?}");
-    assert!(
-        var_reads.contains(&&json!("mkdp_open_to_the_world")),
-        "{seen:?}"
-    );
-    // the channel id from nvim_get_api_info is stored for the plugin scripts
-    assert!(
-        seen.iter()
-            .any(|r| r.method == "nvim_set_var"
-                && r.args == [json!("mkdp_node_channel_id"), json!(42)]),
-        "{seen:?}"
-    );
+    // options come from --config/markdown-preview.toml now: no editor globals
+    // are read, and mkdp_node_channel_id is not written
+    assert!(!seen.iter().any(|r| r.method == "nvim_get_var"), "{seen:?}");
+    assert!(!seen.iter().any(|r| r.method == "nvim_set_var"), "{seen:?}");
     server.reply(open.id, Ok(Value::Null));
 
     // what :MarkdownPreview does through mkdp#util#open_browser
@@ -418,7 +412,7 @@ fn exits_when_nvim_closes_stdin() {
     let mut server = Server::start(Mode::Nvim);
     // the server is up and waiting on the editor
     match server.next() {
-        Message::Request(req) => assert_eq!(req.method, "nvim_get_var"),
+        Message::Request(req) => assert_eq!(req.method, "nvim_call_function"),
         Message::Response(..) => panic!("expected a request"),
     }
     server.close_stdin();
@@ -429,7 +423,7 @@ fn exits_when_nvim_closes_stdin() {
 fn exits_when_vim_closes_stdin() {
     let mut server = Server::start(Mode::Vim);
     match server.next() {
-        Message::Request(req) => assert_eq!(req.method, "nvim_get_var"),
+        Message::Request(req) => assert_eq!(req.method, "nvim_call_function"),
         Message::Response(..) => panic!("expected a request"),
     }
     server.close_stdin();

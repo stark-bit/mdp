@@ -1,10 +1,10 @@
+mod config;
 mod editor;
 mod logger;
 mod opener;
 mod server;
 
 fn main() {
-    // older plugin scripts pass `--path <app/server.js>`, which is ignored
     if std::env::args().nth(1).as_deref() == Some("--version") {
         println!("{}", env!("CARGO_PKG_VERSION"));
         return;
@@ -20,8 +20,8 @@ fn main() {
         .build()
         .expect("failed to start tokio runtime");
 
+    let config = config::Config::load_and_parse(std::env::args().skip(1));
     runtime.block_on(async {
-        let (editor, incoming) = editor::Editor::attach();
-        server::run(editor, incoming).await;
+        server::run(config).await;
     });
 }
