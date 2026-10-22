@@ -1,6 +1,6 @@
-// Release checks that need neither an editor nor a browser: the names and
-// versions spread over the workflow, the install scripts and the plugin must
-// agree, or a release publishes something users cannot install.
+// Release checks that need neither a browser nor a running server: the names
+// and versions spread over the workflow, the install scripts and the built
+// binary must agree, or a release publishes something users cannot install.
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -19,11 +19,12 @@ import { dirname, join } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
-import { REPO, SERVER_BINARY } from "../lib/editor";
+import { REPO, SERVER_BINARY } from "../lib/server";
 import { VERSION } from "../lib/release";
 
 const read = (path: string) => readFileSync(join(REPO, path), "utf8");
-const RELEASES = "https://github.com/sammaji/markdown-preview.nvim/releases/download";
+// the download base install.sh itself uses, so the script and these checks agree
+const RELEASES = /url="([^"]+releases\/download)/.exec(read("app/install.sh"))![1];
 
 /** Asset base names the release workflow publishes. */
 function releasedAssets() {
@@ -31,13 +32,6 @@ function releasedAssets() {
   const names = [...workflow.matchAll(/^\s+name: (markdown-preview-[\w-]+)$/gm)].map((m) => m[1]);
   expect(names.length, "release.yml matrix names").toBeGreaterThan(0);
   return names;
-}
-
-/** Platforms mkdp#util#get_platform() can answer. */
-function pluginPlatforms() {
-  const util = read("autoload/mkdp/util.vim");
-  const body = /function! s:detect_platform\(\)[\s\S]*?endfunction/.exec(util)![0];
-  return [...body.matchAll(/return '([\w-]+)'/g)].map((m) => m[1]);
 }
 
 test.describe("versions", () => {
@@ -52,28 +46,6 @@ test.describe("versions", () => {
     expect(top, "newest CHANGELOG.md entry").toBe(`v${VERSION}`);
   });
 
-  test("the plugin reads the same version as the scripts", () => {
-    // mkdp#util#version(), install.sh and install.cmd each parse Cargo.toml themselves
-    const out = execFileSync(
-      "nvim",
-      [
-        "--headless",
-        "-u",
-        "NONE",
-        "-i",
-        "NONE",
-        "--cmd",
-        `set rtp^=${REPO}`,
-        "-c",
-        "call writefile([mkdp#util#version()], '/dev/stdout')",
-        "-c",
-        "qa!",
-      ],
-      { encoding: "utf8" },
-    ).trim();
-    expect(out).toBe(VERSION);
-  });
-
   test("release.sh tags what release.yml builds", () => {
     expect(read("release.sh")).toContain('tag="v$version"');
     expect(read(".github/workflows/release.yml")).toMatch(/tags: \["v\*"\]/);
@@ -81,13 +53,6 @@ test.describe("versions", () => {
 });
 
 test.describe("release assets", () => {
-  test("every platform the plugin knows has a released asset", () => {
-    const assets = releasedAssets();
-    for (const platform of pluginPlatforms()) {
-      expect(assets, `mkdp#util#get_platform() = '${platform}'`).toContain(`markdown-preview-${platform}`);
-    }
-  });
-
   test("install.sh only downloads released assets", () => {
     const assets = releasedAssets();
     const downloads = [...read("app/install.sh").matchAll(/download (markdown-preview-[\w-]+)\.tar\.gz/g)].map(
@@ -97,40 +62,13 @@ test.describe("release assets", () => {
     for (const name of downloads) expect(assets).toContain(name);
   });
 
-  test("mkdp#util#get_platform() names the asset for the machine", () => {
-    test.skip(process.platform !== "linux", "macOS and Windows are detected by the editor, not uname");
-    const cases: [string, string][] = [
-      ["Linux x86_64", "linux"],
-      ["Linux aarch64", "linux-arm64"],
-      ["FreeBSD amd64", "freebsd"],
-    ];
-    for (const [system, platform] of cases) {
-      const bin = mkdtempSync(join(tmpdir(), "mkdp-uname-"));
-      try {
-        writeFileSync(join(bin, "uname"), `#!/bin/sh\necho '${system}'\n`);
-        chmodSync(join(bin, "uname"), 0o755);
-        const out = execFileSync(
-          "nvim",
-          ["--headless", "-u", "NONE", "-i", "NONE", "--cmd", `set rtp^=${REPO}`,
-            "-c", "call writefile([mkdp#util#get_platform()], '/dev/stdout')", "-c", "qa!"],
-          { encoding: "utf8", env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } },
-        ).trim();
-        expect(out, system).toBe(platform);
-      } finally {
-        rmSync(bin, { recursive: true, force: true });
-      }
-    }
-  });
-
   test("install.cmd downloads the Windows asset", () => {
     expect(read("app/install.cmd")).toContain('$file = "markdown-preview-win.zip"');
     expect(releasedAssets()).toContain("markdown-preview-win");
   });
 
-  test("archives hold the file name the plugin runs", () => {
+  test("the archives hold the binary the release workflow builds", () => {
     const workflow = read(".github/workflows/release.yml");
-    // app/bin/markdown-preview-<platform>[.exe], see s:pre_build in autoload/mkdp/util.vim
-    expect(read("autoload/mkdp/util.vim")).toContain("let s:pre_build = s:mkdp_root_dir . '/app/bin/markdown-preview-'");
     expect(workflow).toContain("cp target/${{ matrix.target }}/release/markdown-preview ${{ matrix.name }}");
     expect(workflow).toContain("tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}");
     expect(workflow).toContain("markdown-preview.exe ${{ matrix.name }}.exe");
@@ -201,13 +139,12 @@ test.describe("install.sh", () => {
     });
   }
 
-  test("without a tag it installs the plugin's version", () => {
+  test("without a tag it installs the built version", () => {
     const result = install("Linux x86_64");
     expect(result.requests).toEqual([`${RELEASES}/v${VERSION}/markdown-preview-linux.tar.gz`]);
   });
 
-  // unsupported systems must not get a binary for another architecture, and
-  // the build hook must see the failure
+  // unsupported systems must not get a binary for another architecture
   for (const system of ["Linux i686", "Linux armv7l", "FreeBSD arm64", "SunOS i86pc"]) {
     test(`${system} downloads nothing`, () => {
       const result = install(system, ["v1.2.3"]);
@@ -240,7 +177,7 @@ function docPages() {
     }
   };
   walk(CONTENT);
-  return pages;
+  return pages.filter((page) => existsSync(join(REPO, page)));
 }
 
 /** Markdown without its fenced code blocks, where `#` and `](` mean nothing. */
@@ -276,17 +213,6 @@ function linkTarget(doc: string, file: string) {
   return existsSync(join(REPO, path)) ? path : undefined;
 }
 
-/** `#### \`name\`` headings of the configuration reference, per section. */
-function documentedOptions() {
-  const config = read(`${CONTENT}/configuration.mdx`);
-  const section = (from: string, to: string) =>
-    [...config.slice(config.indexOf(from), config.indexOf(to)).matchAll(/^#### `(\w+)`/gm)].map((m) => m[1]);
-  return {
-    options: section("\n## Options", "\n## Preview options"),
-    previewOptions: section("\n## Preview options", "\n## Commands and mappings"),
-  };
-}
-
 test.describe("examples", () => {
   test("the files examples/features.md shows are in the repository", () => {
     const tracked = new Set(execFileSync("git", ["ls-files", "examples"], { cwd: REPO, encoding: "utf8" }).split("\n"));
@@ -302,53 +228,6 @@ test.describe("examples", () => {
 });
 
 test.describe("docs", () => {
-  test("every mkdp#util# function the docs mention exists", () => {
-    const util = read("autoload/mkdp/util.vim");
-    const defined = new Set([...util.matchAll(/^function! (mkdp#util#\w+)/gm)].map((m) => m[1]));
-    for (const doc of [...docPages(), "build.lua"]) {
-      for (const [, name] of read(doc).matchAll(/(mkdp#util#\w+)/g)) {
-        expect(defined, `${name} in ${doc}`).toContain(name);
-      }
-    }
-  });
-
-  test("every documented option is read by the plugin or the server", () => {
-    const code = ["plugin/mkdp.vim", "autoload/mkdp/util.vim", "autoload/mkdp/autocmd.vim", "autoload/mkdp.vim", "src/server.rs"]
-      .map(read)
-      .join("\n");
-    const { options } = documentedOptions();
-    expect(options.length).toBeGreaterThan(20);
-    for (const option of options) {
-      // g:mkdp_x in vimscript, get(g:, 'mkdp_x') or get_var("mkdp_x") elsewhere
-      expect(code, `g:mkdp_${option}`).toMatch(new RegExp(`(g:mkdp_${option}\\b|['"]mkdp_${option}['"])`));
-    }
-  });
-
-  test("every option of the plugin and of setup() is documented", () => {
-    const { options } = documentedOptions();
-    const internal = new Set(["clients_active", "node_channel_id"]);
-    const defaults = [...read("plugin/mkdp.vim").matchAll(/^\s*let g:mkdp_(\w+) =/gm)].map((m) => m[1]);
-    const table = /local OPTIONS = \{([\s\S]*?)\n\}/.exec(read("lua/markdown-preview/init.lua"))![1];
-    const setup = [...table.matchAll(/^\s+(\w+) =/gm)].map((m) => m[1]);
-    expect(setup.length).toBeGreaterThan(20);
-    // preview_options has a section of its own
-    const documented = [...options, "preview_options"];
-    for (const option of [...defaults, ...setup].filter((o) => !internal.has(o))) {
-      expect(documented, `${option} in configuration.mdx`).toContain(option);
-    }
-    // and nothing documented that setup() rejects
-    for (const option of options) expect(setup, `setup() accepts ${option}`).toContain(option);
-  });
-
-  test("the preview options are documented, and exist", () => {
-    const { previewOptions } = documentedOptions();
-    const protocol = read("app/src/lib/protocol.ts");
-    const body = /interface PreviewOptions \{([\s\S]*?)\n\}/.exec(protocol)![1];
-    const keys = [...body.matchAll(/^\s+(\w+)\?:/gm)].map((m) => m[1]);
-    expect(keys.length).toBeGreaterThan(10);
-    expect([...previewOptions].sort()).toEqual([...keys].sort());
-  });
-
   test("links between the docs point to pages and headings that exist", () => {
     let checked = 0;
     for (const doc of docPages()) {
@@ -367,13 +246,5 @@ test.describe("docs", () => {
       }
     }
     expect(checked).toBeGreaterThan(50);
-  });
-
-  test("the lazy.nvim example builds without calling an autoload function (#690)", () => {
-    // `build = function() vim.fn["mkdp#util#install"]() end` runs before the
-    // plugin is on the runtimepath and fails with E117
-    for (const doc of docPages()) {
-      expect(read(doc), doc).not.toMatch(/build\s*=\s*function\(\)\s*vim\.fn\[/);
-    }
   });
 });

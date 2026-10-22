@@ -2,29 +2,31 @@ import { randomBytes } from "node:crypto";
 
 import { test as base, type Page } from "@playwright/test";
 
-import { Editor, type EditorKind, type StartOptions } from "./editor";
+import { Server, type StartOptions } from "./server";
+
 
 export { expect } from "@playwright/test";
-export { waitFor } from "./editor";
+export { waitFor } from "./server";
 
-/** A word that cannot be in the page unless it came from this test's buffer. */
+/** A word that cannot be in the page unless it came from this test's file. */
 export function token() {
   return `tok${randomBytes(6).toString("hex")}`;
 }
 
 export const test = base.extend<{
-  /** which editor runs the plugin, set per project in playwright.config.ts */
-  editorKind: EditorKind;
-  /** `g:` variables for `editor`, set before the plugin loads */
-  mkdpVars: Record<string, unknown>;
-  /** starts more editors, stopped at the end of the test */
-  launch: (options?: StartOptions) => Promise<Editor>;
-  editor: Editor;
+  /** files the server previews at startup, set per project or per test */
+  files: string[];
+  /** keys for the server's config file, set per test */
+  config: Record<string, unknown> | undefined;
+  /** starts more servers in fresh temp roots, stopped at the end of the test */
+  launch: (options?: StartOptions) => Promise<Server>;
+  /** one server in a fresh temp root, stopped at the end of the test */
+  server: Server;
   /** browser console output and page errors, attached to failing tests */
   consoleLog: string[];
 }>({
-  editorKind: ["nvim", { option: true }],
-  mkdpVars: [{}, { option: true }],
+  files: [[], { option: true }],
+  config: [undefined, { option: true }],
   consoleLog: async ({ context }, use) => {
     const log: string[] = [];
     const watch = (page: Page) => {
@@ -35,37 +37,40 @@ export const test = base.extend<{
     context.on("page", watch);
     await use(log);
   },
-  launch: async ({ editorKind, consoleLog }, use, testInfo) => {
-    const editors: Editor[] = [];
+  launch: async ({ consoleLog }, use, testInfo) => {
+    const servers: Server[] = [];
     try {
       await use(async (options) => {
-        const editor = await Editor.start(editorKind, options);
-        editors.push(editor);
-        return editor;
+        // previewing one file by default: the server only prints urls for
+        // files it was started with, and every test needs a url
+        const server = await Server.start({ files: ["note.md"], ...options });
+        servers.push(server);
+        return server;
       });
     } finally {
       const failed = testInfo.status !== testInfo.expectedStatus;
-      for (const [i, editor] of editors.entries()) {
+      for (const [i, server] of servers.entries()) {
         if (failed) {
-          await testInfo.attach(`editor ${i + 1}`, { body: await editor.diagnostics(), contentType: "text/plain" });
+          await testInfo.attach(`server ${i + 1}`, { body: server.log(), contentType: "text/plain" });
         }
-        await editor.stop();
+        await server.stop();
       }
-      if (failed) {
+      if (failed && consoleLog.length) {
         await testInfo.attach("page console", { body: consoleLog.join("\n"), contentType: "text/plain" });
       }
     }
   },
-  editor: async ({ launch, mkdpVars }, use) => {
-    await use(await launch({ vars: mkdpVars }));
+  server: async ({ launch, files, config }, use) => {
+    const options: StartOptions = { config };
+    if (files.length) options.files = files;
+    await use(await launch(options));
   },
 });
 
-/** Opens `path` with `content`, starts the preview and loads it in `page`. */
-export async function preview(editor: Editor, page: Page, path: string, content: string) {
-  await editor.open(path, content);
-  await editor.command("MarkdownPreview");
-  const url = await editor.previewUrl();
+/** Writes a markdown file into the server's root and loads its page. */
+export async function preview(server: Server, page: Page, path: string, content: string) {
+  server.write(path, content);
+  const url = server.pageUrl(path);
   await page.goto(url);
   return url;
 }

@@ -1,138 +1,88 @@
-// The server process over the life of an editor session.
-import { readFileSync } from "node:fs";
+// The server process over its life: a clean exit on Ctrl-C, and a page that
+// notices when the server dies and reconnects to a new one.
+import { createServer, type Server as NetServer } from "node:net";
 
-import type { Editor } from "../lib/editor";
-import { expect, preview, test, token, waitFor } from "../lib/test";
+import { Server } from "../lib/server";
+import { expect, preview, test, token } from "../lib/test";
 
-/** pid of the server, from its log. */
-function serverPid(editor: Editor): Promise<number> {
-  return waitFor("the server to log its pid", () => {
-    const match = /\(pid:(\d+)\)/.exec(readFileSync(editor.logFile, "utf8"));
-    return match ? Number(match[1]) : undefined;
-  });
+/** A port that is free right now on every interface. */
+async function freePort(): Promise<number> {
+  const probe: NetServer = createServer();
+  await new Promise<void>((r) => probe.listen(0, "127.0.0.1", r));
+  const port = (probe.address() as { port: number }).port;
+  await new Promise((r) => probe.close(r));
+  return port;
 }
 
-function alive(pid: number) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-test("quitting the editor stops the server", async ({ launch, page }) => {
-  const editor = await launch();
-  const url = await preview(editor, page, "note.md", "# Quit\n");
-  await expect(page.locator(".markdown-body h1")).toContainText("Quit");
-  const pid = await serverPid(editor);
-  expect(alive(pid)).toBe(true);
-
-  await editor.stop({ keepDir: true });
-  await expect.poll(() => alive(pid), { timeout: 5_000 }).toBe(false);
-  await expect(page.locator("#page-header .status")).not.toHaveCount(0);
-  expect(await fetch(url).then(() => "answered", () => "refused")).toBe("refused");
+test("Ctrl-C stops the server with exit code 0", async ({ launch }) => {
+  const server = await launch({ files: ["note.md"] });
+  const url = new URL(server.url).origin;
+  server.process.kill("SIGINT");
+  expect(await server.exited).toBe(0);
+  await expect
+    .poll(() => fetch(url).then(() => "answered", () => "refused"), { timeout: 5_000 })
+    .toBe("refused");
 });
 
-test("a crashed server shows as disconnected in the page", async ({ editor, page }) => {
-  await preview(editor, page, "note.md", "# Crash\n");
+test("a killed server shows as disconnected in the page", async ({ server, page }) => {
+  await preview(server, page, "note.md", "# Crash\n");
   await expect(page.locator(".markdown-body h1")).toContainText("Crash");
-  process.kill(await serverPid(editor), "SIGKILL");
+  server.process.kill("SIGKILL");
   await expect(page.locator("#page-header .status")).toHaveText("Disconnected");
   // the last render stays readable
   await expect(page.locator(".markdown-body h1")).toContainText("Crash");
 });
 
-test("a new preview after a crash works", async ({ editor, page }) => {
-  await preview(editor, page, "note.md", "# Before\n");
-  await expect(page.locator(".markdown-body h1")).toContainText("Before");
-  const first = await serverPid(editor);
-  process.kill(first, "SIGKILL");
-  await expect.poll(() => editor.eval<number>("mkdp#rpc#get_server_status()")).toBe(-1);
+test("the page reconnects to a new server on the same port", async ({ launch, page }) => {
+  const port = await freePort();
+  const server = await launch({ files: ["note.md"], flags: ["--port", String(port)] });
+  await preview(server, page, "note.md", "# Reconnect\n");
+  await expect(page.locator(".markdown-body h1")).toContainText("Reconnect");
+  server.process.kill("SIGKILL");
+  await expect(page.locator("#page-header .status")).toHaveText("Disconnected");
 
-  const typed = token();
-  await editor.keys(`Go${typed}<Esc>`);
-  await editor.command("MarkdownPreview");
-  const reopened = await page.context().newPage();
-  await reopened.goto(await editor.previewUrl(2));
-  await expect(reopened.locator(".markdown-body")).toContainText(typed);
+  const again = await Server.start({
+    cwd: server.dir,
+    files: ["note.md"],
+    flags: ["--port", String(port)],
+  });
+  try {
+    // the page keeps retrying, and the new server answers on the same port
+    await expect(page.locator("#page-header .status")).toHaveCount(0);
+    await expect(page.locator(".markdown-body h1")).toContainText("Reconnect");
+  } finally {
+    await again.stop();
+  }
 });
 
-test("each buffer has its own page", async ({ editor, page, context }) => {
+test("each file has its own page", async ({ launch, page, context }) => {
   const a = token();
   const b = token();
-  await preview(editor, page, "a.md", `# ${a}\n`);
-  // a.md stays loaded and previewed while b.md is previewed in a split
-  editor.write("b.md", `# ${b}\n`);
-  await editor.command("split b.md");
-  await editor.command("MarkdownPreview");
+  const server = await launch({ files: ["a.md", "b.md"] });
+  await preview(server, page, "a.md", `# ${a}\n`);
   const other = await context.newPage();
-  await other.goto(await editor.previewUrl(2));
+  await preview(server, other, "b.md", `# ${b}\n`);
   await expect(page.locator(".markdown-body h1")).toContainText(a);
   await expect(other.locator(".markdown-body h1")).toContainText(b);
 
-  // typing in b only changes b's page
-  const typed = token();
-  await editor.keys(`Go${typed}<Esc>`);
-  await expect(other.locator(".markdown-body")).toContainText(typed);
-  await expect(page.locator(".markdown-body")).not.toContainText(typed);
-  await expect(page.locator(".markdown-body h1")).toContainText(a);
+  // a change to b only reaches b's page
+  const inB = token();
+  server.write("b.md", `# ${b}\n\n${inB}\n`);
+  await expect(other.locator(".markdown-body")).toContainText(inB);
+  await expect(page.locator(".markdown-body")).not.toContainText(inB);
 
-  // and back in a, a's page follows
+  // and a change to a only reaches a's page
   const inA = token();
-  await editor.command("wincmd j");
-  await editor.keys(`Go${inA}<Esc>`);
+  server.write("a.md", `# ${a}\n\n${inA}\n`);
   await expect(page.locator(".markdown-body")).toContainText(inA);
   await expect(other.locator(".markdown-body")).not.toContainText(inA);
 });
 
-test("one server serves every preview of the editor", async ({ editor, page }) => {
-  await preview(editor, page, "a.md", "# A\n");
-  const pid = await serverPid(editor);
-  editor.write("b.md", "# B\n");
-  await editor.command("split b.md");
-  await editor.command("MarkdownPreview");
-  const urls = await waitFor("a second URL", async () => ((await editor.urls()).length === 2 ? editor.urls() : undefined));
-  expect(new URL(urls[0]).port).toBe(new URL(urls[1]).port);
-  const pids = new Set([...readFileSync(editor.logFile, "utf8").matchAll(/\(pid:(\d+)\)/g)].map((m) => Number(m[1])));
-  expect([...pids]).toEqual([pid]);
-});
-
-test("reloading the page shows the current buffer", async ({ editor, page }) => {
-  await preview(editor, page, "note.md", "# Reload\n");
-  const typed = token();
-  await editor.keys(`Go${typed}<Esc>`);
-  await expect(page.locator(".markdown-body")).toContainText(typed);
+test("reloading the page shows the current file", async ({ server, page }) => {
+  await preview(server, page, "note.md", "# Reload\n");
+  const written = token();
+  server.write("note.md", `# Reload\n\n${written}\n`);
+  await expect(page.locator(".markdown-body")).toContainText(written);
   await page.reload();
-  await expect(page.locator(".markdown-body")).toContainText(typed);
-});
-
-test("pages for unknown buffers stay empty", async ({ editor, page }) => {
-  const url = await preview(editor, page, "note.md", "# Known\n");
-  const other = await page.context().newPage();
-  await other.goto(new URL("/page/999", url).href);
-  await expect(other.locator(".markdown-body")).toBeAttached();
-  await other.waitForTimeout(1_000);
-  await expect(other.locator(".markdown-body")).toBeEmpty();
-});
-
-test("the old /<bufnr> URL redirects to the page", async ({ editor, page }) => {
-  const url = await preview(editor, page, "note.md", "# Old\n");
-  const bufnr = await editor.eval<number>("bufnr('%')");
-  await page.goto(new URL(`/${bufnr}`, url).href);
-  await expect(page).toHaveURL(new RegExp(`/page/${bufnr}$`));
-  await expect(page.locator(".markdown-body h1")).toContainText("Old");
-});
-
-test.describe(":checkhealth", () => {
-  test("reports the server binary", async ({ editor, editorKind }) => {
-    test.skip(editorKind === "vim", ":checkhealth is Neovim only");
-    const version = /^version\s*=\s*"([^"]+)"/m.exec(readFileSync(`${__dirname}/../../Cargo.toml`, "utf8"))![1];
-    await editor.command("checkhealth mkdp");
-    const report = await editor.eval<string>("join(getline(1, '$'), \"\\n\")");
-    expect(report).toContain(`Plugin version: ${version}`);
-    expect(report).toContain(`Server version: ${version}`);
-    expect(report).toMatch(/OK.*Server binary found/);
-    expect(report).not.toMatch(/ERROR/);
-  });
+  await expect(page.locator(".markdown-body")).toContainText(written);
 });

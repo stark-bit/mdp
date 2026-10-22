@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import type { Page } from "@playwright/test";
 
-import { REPO } from "../lib/editor";
+import { REPO } from "../lib/server";
 import { expect, preview, test, token } from "../lib/test";
 
 // diagram libraries are loaded on demand and draw after the text
@@ -14,9 +14,9 @@ const DRAWN = { timeout: 20_000 };
 const body = (page: Page) => page.locator(".markdown-body");
 
 test.describe("examples/features.md", () => {
-  test.beforeEach(async ({ editor, page }) => {
-    cpSync(join(REPO, "examples/images"), join(editor.dir, "images"), { recursive: true });
-    await preview(editor, page, "features.md", readFileSync(join(REPO, "examples/features.md"), "utf8"));
+  test.beforeEach(async ({ server, page }) => {
+    cpSync(join(REPO, "examples/images"), join(server.dir, "images"), { recursive: true });
+    await preview(server, page, "features.md", readFileSync(join(REPO, "examples/features.md"), "utf8"));
     await expect(body(page).locator("h1")).toContainText("Feature tour");
   });
 
@@ -27,7 +27,9 @@ test.describe("examples/features.md", () => {
     await expect(md.locator("strong").first()).toHaveText("bold");
     await expect(md.locator("s, del").first()).toHaveText("strikethrough");
     await expect(md.locator("kbd")).toHaveText(["Ctrl", "C"]);
-    await expect(md.locator('a[href="https://neovim.io"]')).toHaveText("https://neovim.io");
+    // markdown links, and bare urls linked automatically
+    await expect(md.locator('a[href^="https://github.com/sammaji"]').first()).toHaveText("link");
+    await expect(md.locator("a").filter({ hasText: /^https:\/\// }).first()).toHaveText(/^https:\/\//);
     // typographer
     await expect(md).toContainText("“smart quotes”");
     await expect(md).toContainText("—");
@@ -151,10 +153,10 @@ test.describe("examples/features.md", () => {
   });
 });
 
-test("broken diagrams show an error in their place", async ({ editor, page }) => {
+test("broken diagrams show an error in their place", async ({ server, page }) => {
   const after = token();
   await preview(
-    editor,
+    server,
     page,
     "broken.md",
     [
@@ -175,11 +177,10 @@ test("broken diagrams show an error in their place", async ({ editor, page }) =>
 });
 
 test.describe("theme", () => {
-  test.describe("g:mkdp_theme = 'dark'", () => {
-    test.use({ mkdpVars: { mkdp_theme: "dark" } });
-
-    test("is used, and the toggle switches it", async ({ editor, page }) => {
-      await preview(editor, page, "note.md", "# Theme\n\n```mermaid\ngraph TD\n  A --> B\n```\n");
+  test.describe("theme = 'dark' in the config file", () => {
+    test("is used, and the toggle switches it", async ({ launch, page }) => {
+      const server = await launch({ config: { theme: "dark" } });
+      await preview(server, page, "note.md", "# Theme\n\n```mermaid\ngraph TD\n  A --> B\n```\n");
       const html = page.locator("html");
       await expect(html).toHaveAttribute("data-theme", "dark");
       // shadcn themes style .dark
@@ -201,37 +202,38 @@ test.describe("theme", () => {
       await expect.poll(async () => (await mermaid.count()) === 1 && (await mermaid.innerHTML()) !== darkSvg, DRAWN).toBe(true);
       const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
-      // the choice survives updates from the editor
-      const typed = token();
-      await editor.keys(`Go${typed}<Esc>`);
-      await expect(body(page)).toContainText(typed);
+      // the choice survives updates from the server
+      const written = token();
+      server.write("note.md", `# Theme\n\n${written}\n`);
+      await expect(body(page)).toContainText(written);
       await expect(html).toHaveAttribute("data-theme", "light");
       expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(background);
     });
   });
 
-  test.describe("g:mkdp_theme = 'light'", () => {
-    test.use({ mkdpVars: { mkdp_theme: "light" }, colorScheme: "dark" });
+  test.describe("theme = 'light' in the config file", () => {
+    test.use({ colorScheme: "dark" });
 
-    test("wins over a dark system theme", async ({ editor, page }) => {
-      await preview(editor, page, "note.md", "# Theme\n");
+    test("wins over a dark system theme", async ({ launch, page }) => {
+      const server = await launch({ config: { theme: "light" } });
+      await preview(server, page, "note.md", "# Theme\n");
       await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     });
   });
 
   for (const colorScheme of ["dark", "light"] as const) {
-    test.describe(`no g:mkdp_theme, ${colorScheme} system theme`, () => {
+    test.describe(`no theme set, ${colorScheme} system theme`, () => {
       test.use({ colorScheme });
 
-      test("follows the system", async ({ editor, page }) => {
-        await preview(editor, page, "note.md", "# Theme\n");
+      test("follows the system", async ({ server, page }) => {
+        await preview(server, page, "note.md", "# Theme\n");
         await expect(page.locator("html")).toHaveAttribute("data-theme", colorScheme);
       });
     });
   }
 
-  test("dark and light look different", async ({ editor, page }) => {
-    await preview(editor, page, "note.md", "# Theme\n");
+  test("dark and light look different", async ({ server, page }) => {
+    await preview(server, page, "note.md", "# Theme\n");
     const background = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
     const before = await background();
     await page.locator(".theme-toggle").click();
@@ -239,33 +241,30 @@ test.describe("theme", () => {
   });
 });
 
-test("names with spaces and non-ASCII characters", async ({ editor, page }) => {
-  editor.write(
+test("names with spaces and non-ASCII characters", async ({ server, page }) => {
+  server.write(
     "my images/图 1.svg",
     '<svg xmlns="http://www.w3.org/2000/svg" width="41" height="19"><rect width="41" height="19"/></svg>',
   );
   const text = token();
-  await preview(editor, page, "笔记 notes.md", `# 你好 ${text}\n\n![pic](<my images/图 1.svg>)\n`);
+  await preview(server, page, "笔记 notes.md", `# 你好 ${text}\n\n![pic](<my images/图 1.svg>)\n`);
   await expect(body(page).locator("h1")).toContainText(`你好 ${text}`);
-  await expect(page).toHaveTitle("「笔记 notes」");
   const img = body(page).locator("img[alt=pic]");
   await expect.poll(() => img.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBe(41);
 });
 
-test("a large document renders and follows the cursor", async ({ editor, page }) => {
+test("a large document renders quickly and follows edits", async ({ server, page }) => {
   const sections = Array.from(
     { length: 400 },
     (_, i) => `## Section ${i}\n\nSome **text** with \`code\` and $x^${i}$.\n\n- a\n- b\n\n\`\`\`js\nconst x = ${i};\n\`\`\``,
   );
   const last = token();
   const started = Date.now();
-  await preview(editor, page, "big.md", `# Big\n\n${sections.join("\n\n")}\n\n${last}\n`);
+  await preview(server, page, "big.md", `# Big\n\n${sections.join("\n\n")}\n\n${last}\n`);
   await expect(body(page)).toContainText(last);
   expect(Date.now() - started).toBeLessThan(15_000);
 
-  await editor.keys("G");
-  await expect(page.getByText(last)).toBeInViewport();
   const edited = token();
-  await editor.keys(`O${edited}<Esc>`);
+  server.write("big.md", `# Big\n\n${edited}\n\n${sections.join("\n\n")}\n\n${last}\n`);
   await expect(body(page)).toContainText(edited);
 });

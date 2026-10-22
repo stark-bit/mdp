@@ -3,7 +3,7 @@
 // changed; there is deliberately no switch to skip it and test a stale binary.
 import { execFileSync } from "node:child_process";
 
-import { REPO } from "./lib/editor";
+import { REPO } from "./lib/server";
 
 export default function globalSetup() {
   execFileSync("cargo", ["build", "--release", "--locked"], { cwd: REPO, stdio: "inherit" });

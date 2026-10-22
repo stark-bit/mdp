@@ -11,9 +11,9 @@ const DRAWN = { timeout: 20_000 };
 
 const body = (page: Page) => page.locator(".markdown-body");
 
-test("GitHub alerts", async ({ editor, page }) => {
+test("GitHub alerts", async ({ server, page }) => {
   const [note, caution] = [token(), token()];
-  await preview(editor, page, "alerts.md", `# Alerts\n\n> [!NOTE]\n> ${note}\n\n> [!CAUTION]\n> ${caution}\n`);
+  await preview(server, page, "alerts.md", `# Alerts\n\n> [!NOTE]\n> ${note}\n\n> [!CAUTION]\n> ${caution}\n`);
   const noteBox = body(page).locator(".markdown-alert.markdown-alert-note");
   await expect(noteBox).toContainText(note);
   await expect(noteBox.locator(".markdown-alert-title")).toHaveText("Note");
@@ -26,11 +26,11 @@ test("GitHub alerts", async ({ editor, page }) => {
 });
 
 test.describe("front matter panel", () => {
-  test.use({ mkdpVars: { mkdp_preview_options: { front_matter: "panel" } } });
+  test.use({ config: { preview_options: { front_matter: "panel" } } });
 
-  test("is collapsed and opens on click, and stays open while typing", async ({ editor, page }) => {
+  test("is collapsed and opens on click, and stays open across edits", async ({ server, page }) => {
     const [meta, after] = [token(), token()];
-    await preview(editor, page, "meta.md", `---\ntitle: ${meta}\n---\n\n# Body\n`);
+    await preview(server, page, "meta.md", `---\ntitle: ${meta}\n---\n\n# Body\n`);
     const panel = body(page).locator("details.front-matter");
     await expect(panel).toHaveCount(1);
     await expect(panel.locator("code")).toContainText(`title: ${meta}`);
@@ -38,29 +38,29 @@ test.describe("front matter panel", () => {
     await panel.locator("summary").click();
     await expect(panel.locator("code")).toBeVisible();
 
-    await editor.keys(`Go${after}<Esc>`);
+    server.write("meta.md", `---\ntitle: ${meta}\n---\n\n# Body\n\n${after}\n`);
     await expect(body(page)).toContainText(after);
     await expect(panel.locator("code")).toBeVisible();
   });
 });
 
 test.describe("mermaid", () => {
-  test("a broken edit keeps the last drawing", async ({ editor, page }) => {
+  test("a broken edit keeps the last drawing", async ({ server, page }) => {
     const [good, broken] = [token(), token()];
-    await preview(editor, page, "maid.md", `# Maid\n\n\`\`\`mermaid\ngraph TD\n  A[${good}] --> B\n\`\`\`\n`);
+    await preview(server, page, "maid.md", `# Maid\n\n\`\`\`mermaid\ngraph TD\n  A[${good}] --> B\n\`\`\`\n`);
     const diagram = body(page).locator(".mermaid");
     await expect(diagram.locator("svg").first()).toContainText(good, DRAWN);
 
     // turn the diagram into a syntax error
-    await editor.keys(`4Gccgraph TD ${broken} --><Esc>`);
+    server.write("maid.md", `# Maid\n\n\`\`\`mermaid\ngraph TD ${broken} -->\n\`\`\`\n`);
     await expect(diagram.locator(".diagram-error")).toContainText("last diagram that rendered", DRAWN);
     await expect(diagram.locator("svg").first()).toContainText(good);
     await expect(diagram).toHaveClass(/diagram-stale/);
   });
 
-  test("the viewer zooms, pans, downloads and closes", async ({ editor, page }) => {
+  test("the viewer zooms, pans, downloads and closes", async ({ server, page }) => {
     const label = token();
-    await preview(editor, page, "maid.md", `# Maid\n\n\`\`\`mermaid\ngraph LR\n  A[${label}] --> B\n\`\`\`\n`);
+    await preview(server, page, "maid.md", `# Maid\n\n\`\`\`mermaid\ngraph LR\n  A[${label}] --> B\n\`\`\`\n`);
     const diagram = body(page).locator(".mermaid");
     await expect(diagram.locator("svg").first()).toContainText(label, DRAWN);
 
@@ -96,14 +96,14 @@ test.describe("mermaid", () => {
     ]);
     expect(download.suggestedFilename()).toBe("diagram.svg");
     const file = readFileSync((await download.path())!, "utf8");
-    expect(file).toMatch(/^<\?xml[^>]*>\n<svg [^>]*xmlns="http:\/\/www.w3.org\/2000\/svg"/);
+    expect(file).toMatch(/^<\?xml[^>]*>\n<svg [^>]*xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
     expect(file).toContain(label);
 
     await page.keyboard.press("Escape");
     await expect(viewer).toHaveCount(0);
   });
 
-  test("the ELK layout draws", async ({ editor, page }) => {
+  test("the ELK layout draws", async ({ server, page }) => {
     // mermaid bundles ELK and loads it only for diagrams laid out with it
     const elk: string[] = [];
     page.on("response", async (response) => {
@@ -112,7 +112,7 @@ test.describe("mermaid", () => {
     });
     const label = token();
     const src = `---\nconfig:\n  layout: elk\n---\nflowchart LR\n  A[${label}] --> B & C --> D`;
-    await preview(editor, page, "elk.md", `# Elk\n\n\`\`\`mermaid\n${src}\n\`\`\`\n`);
+    await preview(server, page, "elk.md", `# Elk\n\n\`\`\`mermaid\n${src}\n\`\`\`\n`);
     const diagram = body(page).locator(".mermaid");
     await expect(diagram.locator("svg").first()).toContainText(label, DRAWN);
     await expect(diagram.locator(".diagram-error")).toHaveCount(0);
