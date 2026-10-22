@@ -187,15 +187,17 @@ impl App {
         let id = self.next_client_id.fetch_add(1, Ordering::Relaxed);
         info!(LOG, "client connect: {id} {target:?}");
         let (tx, mut rx) = mpsc::unbounded_channel();
+        // edits to the file's directory are what refresh this page;
+        // registered before the first message so a client that edits right
+        // after connecting cannot race the watch
+        match &target {
+            Target::File(path) => self.watch_files(std::slice::from_ref(path)),
+        }
         let data = match &target {
             Target::File(path) => self.file_data(path).await,
         };
         if let Some(data) = data {
             let _ = tx.send(message(json!({ "type": "refresh_content", "data": data })));
-        }
-        // edits to the file's directory are what refresh this page
-        match &target {
-            Target::File(path) => self.watch_files(std::slice::from_ref(path)),
         }
         self.clients
             .lock()
@@ -441,7 +443,7 @@ impl App {
     /// What the page at url path `page` shows.
     async fn target(&self, page: &str) -> Option<Target> {
         let path = self.resolve_file(page.strip_prefix("/files/")?)?;
-        is_markdown(&path).then(|| Target::File(path))
+        is_markdown(&path).then_some(Target::File(path))
     }
 }
 
