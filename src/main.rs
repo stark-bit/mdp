@@ -1,5 +1,4 @@
 mod config;
-mod editor;
 mod logger;
 mod opener;
 mod server;

@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -13,13 +14,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use include_dir::{include_dir, Dir};
+use notify::Watcher;
 use percent_encoding::{percent_decode_str, utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::mpsc;
 
 use crate::config::Config;
-use crate::editor::{Editor, Incoming};
 use crate::{error, info, opener};
 
 const LOG: &str = "server";
@@ -52,50 +53,41 @@ struct Client {
 }
 
 pub struct App {
-    editor: Editor,
     config: Config,
     /// Connected preview pages, keyed by what they show.
     clients: Mutex<HashMap<Target, Vec<Client>>>,
     next_client_id: AtomicU64,
-    /// Pages whose socket is still open, and a signal when one closes.
-    connected: AtomicUsize,
-    disconnected: Notify,
+    /// Watches the parent directories of the previewed files; `None` when
+    /// file watching is unavailable.
+    watcher: Mutex<Option<notify::RecommendedWatcher>>,
+    /// Parent directories already watched.
+    watched: Mutex<HashSet<PathBuf>>,
     open_to_the_world: bool,
     port: u16,
     token: String,
-    /// The editor's working directory when the server started, canonical.
-    /// Files under it are previewed at /files/<path relative to it>.
+    /// The served root, canonical. Files under it are previewed at
+    /// /files/<path relative to it>.
     root: Option<PathBuf>,
 }
 
 pub async fn run(config: Config) {
-    // the bridge stays until Phase 3 for call/call_detached traffic
-    let (editor, mut incoming) = Editor::attach();
-
     let listener = match bind(config.open_to_the_world, config.port).await {
         Ok(listener) => listener,
         Err(err) => {
-            error!(LOG, "failed to start server: {err}");
-            editor.echo_error(&format!(
-                "[markdown-preview.nvim]: failed to start server: {err}"
-            ));
-            // keep answering the editor so rpcrequest() calls don't hang
-            while let Some(msg) = incoming.recv().await {
-                if let Incoming::Request { id, .. } = msg {
-                    editor.respond(id);
-                }
-            }
-            return;
+            eprintln!("[markdown-preview]: failed to start server: {err}");
+            std::process::exit(1);
         }
     };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or_default();
     info!(LOG, "server run: {port}");
 
-    let root = match editor.call("getcwd", vec![]).await {
-        Ok(Value::String(cwd)) => Path::new(&cwd).canonicalize().ok(),
-        _ => None,
+    let root = match &config.root {
+        Some(root) => root.canonicalize().ok(),
+        None => std::env::current_dir()
+            .ok()
+            .and_then(|cwd| cwd.canonicalize().ok()),
     };
-    let app = App::new(config, editor.clone(), port, root);
+    let app = App::new(config, port, root);
     let router = router(app.clone());
     tokio::spawn(async move {
         if let Err(err) = axum::serve(listener, router).await {
@@ -103,30 +95,16 @@ pub async fn run(config: Config) {
         }
     });
 
-    editor.call_detached("mkdp#util#open_browser", vec![]);
-
-    // Requests block the editor until answered, so reply to them right away.
-    // Notifications are handled in order on a separate task.
-    let (notify_tx, notify_rx) = mpsc::unbounded_channel();
-    tokio::spawn(app.clone().process_notifications(notify_rx));
-    while let Some(msg) = incoming.recv().await {
-        match msg {
-            Incoming::Request { id, method } => {
-                if method == "close_all_pages" {
-                    app.close_all_pages().await;
-                }
-                editor.respond(id);
-            }
-            Incoming::Notification { method, args } => {
-                let _ = notify_tx.send((method, args));
-            }
-        }
+    app.spawn_watcher();
+    app.open_files().await;
+    if tokio::signal::ctrl_c().await.is_ok() {
+        info!(LOG, "shutting down");
     }
 }
 
 /// Binds the preferred port, falling back to the following ports and finally
-/// to one picked by the OS. Several editor instances each run their own
-/// server, so a fixed `g:mkdp_port` is often already taken.
+/// to one picked by the OS. A port given with `--port` must be served or the
+/// server fails: a user who picked one expects that one, nearby.
 async fn bind(open_to_the_world: bool, preferred: Option<u16>) -> std::io::Result<TcpListener> {
     let host = if open_to_the_world {
         IpAddr::V4(Ipv4Addr::UNSPECIFIED)
@@ -140,6 +118,7 @@ async fn bind(open_to_the_world: bool, preferred: Option<u16>) -> std::io::Resul
             .unwrap_or(0);
         8080 + (millis % 1000) as u16
     });
+    let mut last_error = None;
     for port in (0..PORT_ATTEMPTS).filter_map(|i| start.checked_add(i)) {
         if ipv6_taken(port) {
             info!(LOG, "port {port} unavailable: in use on IPv6");
@@ -147,10 +126,21 @@ async fn bind(open_to_the_world: bool, preferred: Option<u16>) -> std::io::Resul
         }
         match TcpListener::bind(SocketAddr::new(host, port)).await {
             Ok(listener) => return Ok(listener),
-            Err(err) => info!(LOG, "port {port} unavailable: {err}"),
+            Err(err) => {
+                info!(LOG, "port {port} unavailable: {err}");
+                last_error = Some(err);
+            }
         }
     }
-    TcpListener::bind(SocketAddr::new(host, 0)).await
+    match preferred {
+        Some(_) => Err(last_error.unwrap_or_else(|| {
+            std::io::Error::other(format!(
+                "ports {start}..{} are taken",
+                start + PORT_ATTEMPTS
+            ))
+        })),
+        None => TcpListener::bind(SocketAddr::new(host, 0)).await,
+    }
 }
 
 fn ipv6_taken(port: u16) -> bool {
@@ -166,15 +156,14 @@ fn router(app: Arc<App>) -> Router {
 }
 
 impl App {
-    fn new(config: Config, editor: Editor, port: u16, root: Option<PathBuf>) -> Arc<App> {
+    fn new(config: Config, port: u16, root: Option<PathBuf>) -> Arc<App> {
         let open_to_the_world = config.open_to_the_world;
         Arc::new(App {
             config,
-            editor,
             clients: Mutex::new(HashMap::new()),
             next_client_id: AtomicU64::new(1),
-            connected: AtomicUsize::new(0),
-            disconnected: Notify::new(),
+            watcher: Mutex::new(None),
+            watched: Mutex::new(HashSet::new()),
             open_to_the_world,
             port,
             token: new_token(),
@@ -193,43 +182,9 @@ impl App {
                 .any(|(name, value)| name == self.cookie_name() && value == self.token)
     }
 
-    async fn process_notifications(
-        self: Arc<Self>,
-        mut rx: mpsc::UnboundedReceiver<(String, Value)>,
-    ) {
-        while let Some(first) = rx.recv().await {
-            let mut batch = vec![first];
-            while let Ok(next) = rx.try_recv() {
-                batch.push(next);
-            }
-            for (i, (method, args)) in batch.iter().enumerate() {
-                // cursor movement emits bursts of identical refreshes; only
-                // the last of a consecutive run matters
-                if method == "refresh_content"
-                    && batch.get(i + 1) == Some(&(method.clone(), args.clone()))
-                {
-                    continue;
-                }
-                // nvim sends the params array, vim the dict itself
-                let opts = args.get(0).unwrap_or(args);
-                let Some(file) = opts.get("path").and_then(Value::as_str).map(PathBuf::from) else {
-                    continue;
-                };
-                match method.as_str() {
-                    "refresh_content" => self.refresh_file(&file).await,
-                    "close_page" => self.close_page(&file).await,
-                    "open_browser" => self.open_file(&file).await,
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    /// Serves one preview page until it disconnects or its buffer's preview is
-    /// closed.
+    /// Serves one preview page until it disconnects.
     async fn serve_client(self: Arc<Self>, target: Target, mut socket: WebSocket) {
         let id = self.next_client_id.fetch_add(1, Ordering::Relaxed);
-        self.connected.fetch_add(1, Ordering::SeqCst);
         info!(LOG, "client connect: {id} {target:?}");
         let (tx, mut rx) = mpsc::unbounded_channel();
         let data = match &target {
@@ -237,6 +192,10 @@ impl App {
         };
         if let Some(data) = data {
             let _ = tx.send(message(json!({ "type": "refresh_content", "data": data })));
+        }
+        // edits to the file's directory are what refresh this page
+        match &target {
+            Target::File(path) => self.watch_files(std::slice::from_ref(path)),
         }
         self.clients
             .lock()
@@ -264,8 +223,6 @@ impl App {
         info!(LOG, "disconnect: {id}");
         let _ = socket.send(Message::Close(None)).await;
         drop(socket);
-        self.connected.fetch_sub(1, Ordering::SeqCst);
-        self.disconnected.notify_waiters();
         for clients in self.clients.lock().unwrap().values_mut() {
             clients.retain(|c| c.id != id);
         }
@@ -330,39 +287,95 @@ impl App {
         }
     }
 
-    async fn close_page(&self, path: &Path) {
-        info!(LOG, "close page: {}", path.display());
-        let target = Target::File(path.to_path_buf());
-        self.broadcast(Some(&target), json!({ "type": "close_page" }));
-        self.clients.lock().unwrap().remove(&target);
-    }
-
-    async fn close_all_pages(&self) {
-        info!(LOG, "close all pages");
-        self.broadcast(None, json!({ "type": "close_page" }));
-        self.clients.lock().unwrap().clear();
-        let all_closed = async {
-            loop {
-                let notified = self.disconnected.notified();
-                tokio::pin!(notified);
-                notified.as_mut().enable();
-                if self.connected.load(Ordering::SeqCst) == 0 {
-                    return;
-                }
-                notified.await;
+    /// Watches the parents of the configured files, and the parents of every
+    /// file a page later opens, and refreshes pages when a file changes.
+    fn spawn_watcher(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        // the callback runs on notify's thread; file reads and broadcasts
+        // need the async runtime
+        let runtime = tokio::runtime::Handle::current();
+        let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+            let Some(app) = weak.upgrade() else { return };
+            match result {
+                Ok(event) => app.on_fs_event(event, &runtime),
+                Err(err) => error!(LOG, "file watch failed: {err}"),
             }
-        };
-        if tokio::time::timeout(Duration::from_secs(1), all_closed)
-            .await
-            .is_err()
-        {
-            error!(LOG, "pages still open after close_all_pages");
+        });
+        match watcher {
+            Ok(watcher) => {
+                *self.watcher.lock().unwrap() = Some(watcher);
+                self.watch_files(&self.config.files);
+            }
+            Err(err) => error!(LOG, "file watching unavailable: {err}"),
         }
     }
 
-    async fn open_file(&self, path: &Path) {
-        let editor = &self.editor;
-        let path = self.files_path(path);
+    /// Watches the parent directory of each file, once.
+    fn watch_files(&self, files: &[PathBuf]) {
+        let mut watcher = self.watcher.lock().unwrap();
+        let Some(watcher) = watcher.as_mut() else {
+            return;
+        };
+        let mut watched = self.watched.lock().unwrap();
+        for file in files {
+            let Some(parent) = file
+                .canonicalize()
+                .ok()
+                .and_then(|f| f.parent().map(Path::to_path_buf))
+            else {
+                continue;
+            };
+            if watched.insert(parent.clone()) {
+                if let Err(err) = watcher.watch(&parent, notify::RecursiveMode::NonRecursive) {
+                    error!(LOG, "cannot watch {}: {err}", parent.display());
+                    watched.remove(&parent);
+                }
+            }
+        }
+    }
+
+    /// Refreshes the pages of changed markdown files.
+    fn on_fs_event(self: &Arc<Self>, event: notify::Event, runtime: &tokio::runtime::Handle) {
+        match event.kind {
+            notify::EventKind::Modify(_)
+            | notify::EventKind::Create(_)
+            | notify::EventKind::Remove(_) => {}
+            // reads and metadata-only events are not edits
+            _ => return,
+        }
+        for path in event.paths {
+            let Ok(path) = path.canonicalize() else {
+                continue;
+            };
+            if !is_markdown(&path) {
+                continue;
+            }
+            let app = Arc::clone(self);
+            runtime.spawn(async move { app.refresh_file(&path).await });
+        }
+    }
+
+    /// Prints each configured file's url and opens it in a browser, unless
+    /// `--no-open` was given.
+    async fn open_files(&self) {
+        for file in &self.config.files {
+            let path = file.canonicalize().unwrap_or_else(|_| file.clone());
+            let url = self.page_url(&self.files_path(&path));
+            println!("{url}");
+            if self.config.no_open {
+                continue;
+            }
+            let browser = opener::Browser::from_var(&self.config.browser);
+            info!(LOG, "open page [{browser:?}]: {url}");
+            if let Err(msg) = opener::open(&url, &browser) {
+                error!(LOG, "{msg}");
+            }
+        }
+    }
+
+    /// The url a browser is opened at: the host to use, plus the token when
+    /// the server listens to the world.
+    fn page_url(&self, page: &str) -> String {
         let open_ip = self.config.open_ip.clone().unwrap_or_default();
         let host = if !open_ip.is_empty() {
             open_ip
@@ -371,26 +384,11 @@ impl App {
         } else {
             "localhost".into()
         };
-        let mut url = format!("http://{host}:{}{path}", self.port);
+        let mut url = format!("http://{host}:{}{page}", self.port);
         if self.open_to_the_world {
             url.push_str(&format!("?token={}", self.token));
         }
-
-        if let Some(browserfunc) = self.config.browserfunc.clone().filter(|f| !f.is_empty()) {
-            info!(LOG, "open page [{browserfunc}]: {url}");
-            editor.call_detached(&browserfunc, vec![url.clone().into()]);
-        } else {
-            let browser = opener::Browser::from_var(&self.config.browser);
-            info!(LOG, "open page [{browser:?}]: {url}");
-            if let Err(msg) = opener::open(&url, &browser) {
-                error!(LOG, "{msg}");
-                editor.echo_error(&msg);
-            }
-        }
-        if self.config.echo_preview_url {
-            editor.call_detached("mkdp#util#echo_url", vec![url.clone().into()]);
-        }
-        editor.call_detached("mkdp#util#call_hook", vec!["on_start".into(), url.into()]);
+        url
     }
 }
 

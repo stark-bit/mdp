@@ -44,9 +44,7 @@ fn defaults_without_a_config_file() {
     assert!(!config.open_to_the_world);
     assert_eq!(config.port, None);
     assert_eq!(config.browser, Value::Null);
-    assert_eq!(config.browserfunc, None);
     assert_eq!(config.open_ip, None);
-    assert!(!config.echo_preview_url);
     assert!(!config.combine_preview);
     assert_eq!(config.images_path, None);
     assert_eq!(config.markdown_css, None);
@@ -66,9 +64,7 @@ fn parses_a_config_file() {
             "open_to_the_world = true\n",
             "port = 8080\n",
             "browser = \"firefox\"\n",
-            "browserfunc = \"\"\n",
             "open_ip = \"192.0.2.7\"\n",
-            "echo_preview_url = true\n",
             "combine_preview = true\n",
             "images_path = \"assets\"\n",
             "markdown_css = \"markdown.css\"\n",
@@ -85,9 +81,7 @@ fn parses_a_config_file() {
     assert!(config.open_to_the_world);
     assert_eq!(config.port, Some(8080));
     assert_eq!(config.browser, json!("firefox"));
-    assert_eq!(config.browserfunc, None, "an empty string is unset");
     assert_eq!(config.open_ip.as_deref(), Some("192.0.2.7"));
-    assert!(config.echo_preview_url);
     assert!(config.combine_preview);
     assert_eq!(config.images_path.as_deref(), Some(Path::new("assets")));
     assert_eq!(

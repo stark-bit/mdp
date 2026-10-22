@@ -13,9 +13,7 @@ const KEYS: &[&str] = &[
     "open_to_the_world",
     "port",
     "browser",
-    "browserfunc",
     "open_ip",
-    "echo_preview_url",
     "combine_preview",
     "images_path",
     "markdown_css",
@@ -27,16 +25,15 @@ const KEYS: &[&str] = &[
 ];
 
 // root, files, preview_options, theme and page_title are read by later phases
+// combine_preview is editor-only and disappears with the page cleanup
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct Config {
-    pub open_to_the_world: bool,     // mkdp_open_to_the_world
-    pub port: Option<u16>,           // mkdp_port
-    pub browser: BrowserValue,       // mkdp_browser
-    pub browserfunc: Option<String>, // mkdp_browserfunc (temporary; Phase 3 removes it)
-    pub open_ip: Option<String>,     // mkdp_open_ip
-    pub echo_preview_url: bool,      // mkdp_echo_preview_url (temporary)
-    pub combine_preview: bool,       // mkdp_combine_preview (temporary; Phase 2 removes it)
+    pub open_to_the_world: bool, // mkdp_open_to_the_world
+    pub port: Option<u16>,       // mkdp_port
+    pub browser: BrowserValue,   // mkdp_browser
+    pub open_ip: Option<String>, // mkdp_open_ip
+    pub combine_preview: bool,   // mkdp_combine_preview (temporary)
     pub images_path: Option<PathBuf>,
     pub markdown_css: Option<PathBuf>,
     pub highlight_css: Option<PathBuf>,
@@ -83,14 +80,8 @@ impl Config {
         if let Some(v) = value.get("browser") {
             config.browser = v.clone();
         }
-        if let Some(v) = value.get("browserfunc") {
-            config.browserfunc = optional_string(v);
-        }
         if let Some(v) = value.get("open_ip") {
             config.open_ip = optional_string(v);
-        }
-        if let Some(v) = value.get("echo_preview_url") {
-            config.echo_preview_url = truthy(v);
         }
         if let Some(v) = value.get("combine_preview") {
             config.combine_preview = truthy(v);
