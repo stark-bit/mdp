@@ -7,8 +7,8 @@ description: Light and dark, shadcn/ui and tweakcn themes, fonts, and replacing 
 
 The page follows your system's light or dark preference. To choose one:
 
-```lua
-opts = { theme = "dark" } -- or "light"
+```toml
+theme = "dark" # or "light"
 ```
 
 Click the sun or moon button in the page header to switch for as long
@@ -22,15 +22,11 @@ any shadcn theme changes its colors, fonts and corner radius. To use one:
 1. Pick a theme on [ui.shadcn.com/themes](https://ui.shadcn.com/themes), or
    make your own on [tweakcn.com](https://tweakcn.com).
 2. Copy its CSS (the `globals.css`, or the "Copy code" output) into a file,
-   e.g. `~/.config/nvim/mkdp-theme.css`.
-3. Point the plugin at it with an absolute path:
+   e.g. `~/.config/markdown-preview/theme.css`.
+3. Point the server at it:
 
-```lua
-opts = { theme_css = vim.fn.expand("~/.config/nvim/mkdp-theme.css") }
-```
-
-```vim
-let g:mkdp_theme_css = expand('~/.config/nvim/mkdp-theme.css')
+```toml
+theme_css = "/home/me/.config/markdown-preview/theme.css"
 ```
 
 The file is read on every page load, so reload the page to see your changes.
@@ -90,9 +86,9 @@ file. tweakcn and shadcn don't add this line for you:
 them with a relative `@font-face` URL. This works offline:
 
 ```text
-~/.config/nvim/mkdp-theme.css
-~/.config/nvim/fonts/MyFont-Regular.woff2
-~/.config/nvim/fonts/MyFont-Bold.woff2
+/home/me/.config/markdown-preview/theme.css
+/home/me/.config/markdown-preview/fonts/MyFont-Regular.woff2
+/home/me/.config/markdown-preview/fonts/MyFont-Bold.woff2
 ```
 
 ```css
@@ -124,11 +120,9 @@ For full control, replace the page's stylesheets:
 | `markdown_css`  | [`markdown.css`](https://github.com/sammaji/markdown-preview.nvim/blob/master/app/public/_static/markdown.css): the rendered document         |
 | `highlight_css` | [`highlight.css`](https://github.com/sammaji/markdown-preview.nvim/blob/master/app/public/_static/highlight.css): the colors of code blocks  |
 
-```lua
-opts = {
-  markdown_css = vim.fn.expand("~/.config/nvim/markdown.css"),
-  highlight_css = vim.fn.expand("~/.config/nvim/highlight.css"),
-}
+```toml
+markdown_css = "/home/me/.config/markdown-preview/markdown.css"
+highlight_css = "/home/me/.config/markdown-preview/highlight.css"
 ```
 
 Start from a copy of the built-in file. It styles `.markdown-body` using the

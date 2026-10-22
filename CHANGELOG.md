@@ -1,5 +1,33 @@
 # `sammaji/markdown-preview.nvim` changelog
 
+## Unreleased
+
+#### Breaking changes
+
+- The vim/Neovim plugin is gone; the preview server is now a standalone
+  command-line tool. It is started from the shell instead of an editor
+  command:
+
+  ```sh
+  markdown-preview README.md
+  ```
+
+  The server serves files directly from disk (`/files/<path>`), watches them
+  with a file watcher, prints the preview URL on stdout and opens the browser
+  unless `--no-open` is given. There are no editor commands or `<Plug>`
+  mappings, no `g:mkdp_*` options and no `/page/<bufnr>` URLs any more.
+- Options are read from `markdown-preview.toml` (or `--config`) and
+  command-line flags (`--port`, `--root`, `--browser`, `--no-open`), instead
+  of editor variables. See the [configuration
+  reference](https://mkdp.sammaji.com/configuration).
+- The `plugin/`, `autoload/`, `lua/` and `.vim/` directories, the `app/`
+  install scripts and the plugin-manager build hooks are removed. Install a
+  release binary, or build with `cargo build --release`.
+- The browser page keeps only what a standalone preview needs: synchronised
+  scrolling (`disable_sync_scroll`, `sync_scroll_type`), `auto_start`,
+  `auto_close`, `combine_preview`, `browserfunc`, `echo_preview_url` and the
+  `on_start`/`on_stop` hooks are gone.
+
 ## v0.2.0
 
 #### Security

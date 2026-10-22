@@ -1,145 +1,75 @@
 ---
 title: Configuration
-description: Every option, the preview options, commands, mappings and functions.
+description: The config file, the command-line flags, the preview options and the environment variables.
 ---
 
 ## Setting options
 
-Every option is a `g:mkdp_*` variable. In Neovim, you can also pass them to
-`setup()` without the `mkdp_` prefix:
+The server reads options from a TOML file and from command-line flags:
 
-```lua
-require("markdown-preview").setup({
-  theme = "dark",
-  auto_close = false,
-  preview_options = { sync_scroll_type = "top" },
-})
+1. The built-in defaults.
+2. The config file: `markdown-preview.toml` in the current directory, or the
+   file given with `--config`.
+3. The command-line flags, which override the config file.
+
+```toml
+theme = "dark"
+port = 8090
 ```
 
-With lazy.nvim, `opts` calls `setup()` for you:
-
-```lua
-{
-  "sammaji/markdown-preview.nvim",
-  cmd = { "MarkdownPreviewToggle", "MarkdownPreview", "MarkdownPreviewStop" },
-  ft = { "markdown" },
-  opts = {
-    theme = "dark",
-  },
-}
+```sh
+markdown-preview --port 8090 --no-open note.md
 ```
 
-`setup()`:
-
-- warns about unknown options and values of the wrong type
-- accepts `true`/`false` for switches, and turns them into `1`/`0`
-- merges `preview_options` into the defaults, so you only give the keys you
-  change
-- can be called again later; it re-applies the options that are read once at
-  startup (`filetypes`, `command_for_global`, `auto_start`, `combine_preview`)
-
-In Vim, or in Neovim without `setup()`, set the variables before the plugin
-loads, e.g. in your `vimrc` or in lazy.nvim's `init`:
-
-```vim
-let g:mkdp_theme = 'dark'
-let g:mkdp_auto_close = 0
-let g:mkdp_preview_options = { 'sync_scroll_type': 'top' }
-```
-
-Keys you leave out of `g:mkdp_preview_options` keep their defaults.
+A config file must be valid TOML; unknown keys warn on stderr and are
+ignored. A missing `markdown-preview.toml` is fine; a missing `--config` file
+warns and the defaults are used.
 
 <Callout type="info">
-Lua turns an empty table `{}` into a Vim list. Use `vim.empty_dict()` for an
-empty option table, or leave the option out.
+The config file is read once at startup. Restart the server to apply changes.
 </Callout>
+
+## Command-line flags
+
+```text
+markdown-preview [flags] [files...]
+```
+
+| Flag                 | Description                                                                     |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `[files...]`         | Markdown files to preview; each gets its own page and URL                        |
+| `--config <path>`    | Config file to read; default `markdown-preview.toml` in the current directory    |
+| `--port <n>`         | Port to serve on; the next free port is used when the first 20 are taken         |
+| `--root <dir>`       | Directory the previewed files must live under; default the current directory     |
+| `--browser <cmd...>` | Browser to open the URL in; a name, a comma-separated list or a JSON array       |
+| `--no-open`          | Print the URL but do not open a browser                                          |
+| `--version`          | Print the version                                                                |
+
+`--browser` takes every following argument until the next flag, so put file
+names before it:
+
+```sh
+markdown-preview note.md --browser firefox --new-window
+```
+
+Each file is previewed at `/files/<its path relative to the root>`, and its
+URL is printed on stdout. The browser is opened for each file unless
+`--no-open` is given.
 
 ## Options
 
 The default is shown after each name.
 
-### Opening and closing
-
-#### `auto_start`: `0`
-
-Open the preview when you enter a markdown buffer.
-
-#### `auto_close`: `1`
-
-Close the preview page when you leave its markdown buffer for another one.
-Turn it off to keep the page open, and with
-[`combine_preview`](#combine_preview-0).
-
-#### `combine_preview`: `0`
-
-Use one preview page for all markdown buffers. `:MarkdownPreview` in another
-buffer switches the open page to it instead of opening a new one. Set
-`auto_close` to `0` along with it.
-
-#### `combine_preview_auto_refresh`: `1`
-
-With `combine_preview`, switch the page to a markdown buffer as soon as you
-enter it, without running `:MarkdownPreview`.
-
-#### `filetypes`: `{ "markdown" }`
-
-Filetypes that get the preview commands.
-
-#### `command_for_global`: `0`
-
-Make the preview commands available in every buffer, whatever its filetype.
-
-### Refreshing
-
-#### `refresh_slow`: `0`
-
-`0` refreshes the page as you type and move the cursor. `1` refreshes it only
-when you save, leave insert mode or stop moving the cursor, for large files
-or slow machines.
-
-### Browser
-
-#### `browser`: `""`
-
-The browser to open the preview in; empty uses the system's default browser.
-
-- A name, such as `"firefox"` or `"Google Chrome"`, is opened the way the
-  system opens applications: `open -a` on macOS, `start` on Windows, and run
-  as a program on Linux.
-- A list is run as a command with the URL appended:
-  `{ "firefox", "-P", "work" }`.
-
-See [Browser and sharing](./features/browser.mdx) for new windows, WSL and
-other examples.
-
-#### `browserfunc`: `""`
-
-Name of a Vimscript function that opens the preview instead of `browser`. It is
-called with the URL.
-
-#### `echo_preview_url`: `0`
-
-Show the preview URL in the command line when the preview opens.
-
-#### `on_start`: `""`
-
-Called with the preview URL whenever a preview page is opened. A function
-name, a Funcref or, in Neovim, a Lua function.
-
-#### `on_stop`: `""`
-
-Called when `:MarkdownPreviewStop` (or the toggle) stops a running preview.
-Same types as `on_start`.
-
 ### Server and network
 
-#### `port`: `""`
+#### `port`: unset
 
-Port of the preview server; empty picks a random free port. If the port is
-taken, for example by the preview of another editor, the next free port is
-used.
+Port of the preview server. Without it, the server starts at a random port
+around 8080 and falls back to the following ports. With `port` set (or
+`--port`), the next 20 ports are tried and the server exits with an error if
+none is free.
 
-#### `open_to_the_world`: `0`
+#### `open_to_the_world`: `false`
 
 Listen on all network interfaces instead of only `127.0.0.1`, so other
 devices on your network can open the preview. The preview URL then uses your
@@ -147,73 +77,79 @@ machine's IP address and carries a secret token, and the server answers
 nothing without it. See [Sharing on your
 network](./features/browser.mdx#sharing-on-your-network).
 
-#### `open_ip`: `""`
+#### `open_ip`: unset
 
 Host or IP address used in the preview URL instead of `localhost`, for
-example when you edit on a remote machine and preview on your own.
+example when you run the server on a remote machine and preview on your own.
+
+### Browser
+
+#### `browser`: unset
+
+The browser to open the preview in; unset uses the system's default browser.
+
+- A name, such as `"firefox"` or `"Google Chrome"`, is opened the way the
+  system opens applications: `open -a` on macOS, `start` on Windows, and run
+  as a program on Linux.
+- An array is run as a command with the URL appended:
+  `["firefox", "-P", "work"]`.
+
+See [Browser and sharing](./features/browser.mdx) for new windows, WSL and
+other examples.
 
 ### Page
 
-#### `theme`: `""`
+#### `theme`: unset
 
-`"dark"` or `"light"`. Empty follows the system preference. The button in the
+`"dark"` or `"light"`. Unset follows the system preference. The button in the
 page header switches it until the page is closed.
 
-#### `theme_css`: `""`
+#### `theme_css`: unset
 
-Absolute path of a [shadcn/ui or tweakcn theme](./features/themes.mdx), which
+Path of a [shadcn/ui or tweakcn theme](./features/themes.mdx), which
 changes the page's colors, fonts and radius.
 
-#### `markdown_css`: `""`
+#### `markdown_css`: unset
 
-Absolute path of a stylesheet that replaces the built-in markdown styles.
+Path of a stylesheet that replaces the built-in markdown styles.
 
-#### `highlight_css`: `""`
+#### `highlight_css`: unset
 
-Absolute path of a stylesheet that replaces the built-in code highlighting
-colors.
+Path of a stylesheet that replaces the built-in code highlighting colors.
 
-#### `page_title`: `"「${name}」"`
+#### `page_title`: unset
 
-Title of the browser tab. `${name}` is replaced with the file name.
+Title of the browser tab. `${name}` is replaced with the file name:
 
-#### `images_path`: `""`
+```toml
+page_title = "Preview: ${name}"
+```
 
-Directory that relative image paths are resolved against. Empty uses the
+#### `images_path`: unset
+
+Directory that relative image paths are resolved against. Unset uses the
 directory of the markdown file.
 
 ## Preview options
 
-`preview_options` (`g:mkdp_preview_options`) controls how the page renders.
+`preview_options` is a table in the config file that controls how the page
+renders. Keys you leave out keep their defaults.
 
-```lua
-preview_options = {
-  mkit = vim.empty_dict(),
-  katex = vim.empty_dict(),
-  uml = vim.empty_dict(),
-  maid = vim.empty_dict(),
-  sequence_diagrams = vim.empty_dict(),
-  flowchart_diagrams = vim.empty_dict(),
-  toc = vim.empty_dict(),
-  disable_sync_scroll = 0,
-  sync_scroll_type = "middle",
-  front_matter = "hide",
-  hide_yaml_meta = 1,
-  content_editable = false,
-  disable_filename = 0,
-}
+```toml
+[preview_options]
+front_matter = "panel"
 ```
 
 #### `mkit`
 
 [markdown-it options](https://github.com/markdown-it/markdown-it#init-with-presets-and-options).
-The defaults turn on raw HTML, `linkify` and `typographer`. Use `{ html =
-false }` to not render raw HTML from files you don't trust.
+The defaults turn on raw HTML, `linkify` and `typographer`. Use
+`{ html = false }` to not render raw HTML from files you don't trust.
 
 #### `katex`
 
-[KaTeX options](https://katex.org/docs/options), e.g. `{ macros = { ["\\RR"]
-= "\\mathbb{R}" } }`. Errors are shown in red instead of stopping the page.
+[KaTeX options](https://katex.org/docs/options), e.g. `{ macros = { "\\RR" =
+"\\mathbb{R}" } }`. Errors are shown in red instead of stopping the page.
 
 #### `uml`
 
@@ -241,23 +177,11 @@ The default theme is `"hand"`; `{ theme = "simple" }` draws straight lines.
 [markdown-it-toc-done-right options](https://github.com/nagaozen/markdown-it-toc-done-right#options).
 The list is a `ul` by default.
 
-#### `disable_sync_scroll`
-
-`1` stops the page from scrolling along with the cursor.
-
-#### `sync_scroll_type`
-
-How the page follows the cursor:
-
-- `"middle"`: keep the cursor line in the middle of the page
-- `"top"`: keep the top line of the editor window at the top of the page
-- `"relative"`: keep the cursor line at the same height as in the editor
-
 #### `front_matter`
 
 YAML front matter at the top of the file:
 
-- `"hide"`: not shown
+- `"hide"` (default): not shown
 - `"panel"`: a collapsed panel that shows the YAML
 - `"raw"`: rendered as markdown
 
@@ -269,45 +193,17 @@ both are set.
 #### `content_editable`
 
 `true` makes the page editable, e.g. to try out wording. Edits stay in the
-page and are lost on the next refresh; they are not written to the buffer.
+page and are lost on the next refresh; they are not written to the file.
 
 #### `disable_filename`
 
-`1` hides the header with the file name.
-
-## Commands and mappings
-
-These are defined in buffers with a filetype from `filetypes`, or in every
-buffer with `command_for_global`.
-
-| Command                  | `<Plug>` mapping               | What it does                    |
-| ------------------------ | ------------------------------ | ------------------------------- |
-| `:MarkdownPreview`       | `<Plug>MarkdownPreview`        | Open the preview of the buffer  |
-| `:MarkdownPreviewStop`   | `<Plug>MarkdownPreviewStop`    | Stop the preview and the server |
-| `:MarkdownPreviewToggle` | `<Plug>MarkdownPreviewToggle`  | Open or stop the preview        |
-
-```vim
-nmap <C-p> <Plug>MarkdownPreviewToggle
-```
-
-## Functions
-
-| Function                               | What it does                                                                                 |
-| -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `require("markdown-preview").setup()`  | Set options from Lua, see [above](#setting-options).                                         |
-| `mkdp#util#install()`                  | Download the server binary for this plugin version, in a terminal. Retries a failed download. |
-| `mkdp#util#install_sync()`             | The same, but waits for the download. For plugin manager build hooks.                        |
-| `mkdp#util#server_binary()`            | Path of the server binary in use, or `""`.                                                   |
-| `mkdp#util#version()`                  | Version of the plugin.                                                                       |
-| `mkdp#util#get_platform()`             | Name of the pre-built binary for this system, e.g. `macos-arm64`.                            |
-
-In Neovim, `:checkhealth mkdp` reports the same information.
+`true` hides the header with the file name.
 
 ## Environment variables
 
-Set these before starting the editor, for debugging:
+Set these when you start the server, for debugging:
 
-| Variable              | What it does                                                                                    |
-| --------------------- | ----------------------------------------------------------------------------------------------- |
-| `NVIM_MKDP_LOG_FILE`  | Server log file. Default: `mkdp-nvim-<uid>.log` (`mkdp-nvim.log` on Windows) in the temp directory, alternating with `mkdp-nvim-<uid>.1.log` once one passes 1 MB. |
-| `NVIM_MKDP_LOG_LEVEL` | `debug` (without `NVIM_MKDP_LOG_FILE`, each session logs to its own `mkdp-nvim-<uid>.debug-<time>-<pid>.log`), `info` (default) or `error`. |
+| Variable       | What it does                                                                                       |
+| -------------- | -------------------------------------------------------------------------------------------------- |
+| `MP_LOG_FILE`  | Server log file. Default: `markdown-preview-<uid>.log` (`markdown-preview.log` on Windows) in the temp directory, alternating with `markdown-preview-<uid>.1.log` once one passes 1 MB. |
+| `MP_LOG_LEVEL` | `debug` (without `MP_LOG_FILE`, each session logs to its own `markdown-preview-<uid>.debug-<time>-<pid>.log`), `info` (default) or `error`. |

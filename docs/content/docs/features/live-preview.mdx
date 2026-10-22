@@ -1,82 +1,37 @@
 ---
 title: Live preview
-description: Refreshing, synchronised scrolling, one page for several buffers, opening and closing automatically.
+description: Live updates as you edit the file, links between files, and what the page shows.
 ---
 
 ## Refreshing
 
-The page follows the buffer, not the file: it updates as you type, before you
-save. By default it refreshes on every edit and cursor move.
+The page shows the file on disk, and the server watches it: every time you
+save an edit in any editor, the page updates by itself, without a reload.
 
-If you work with very large files, you can disable this behaviour. This would make
-the preview refresh only on save:
+No save step is involved — the page follows the file, not your editor. Edit
+in vim, VS Code or `cat >> note.md`; the server only sees the file change.
 
-```lua
-opts = { refresh_slow = true }
-```
-
-The page then refreshes when you save, leave insert mode, or stop moving the
-cursor for `'updatetime'` milliseconds.
-
-While you type, the page keeps what you were looking at:
+While you edit, the page keeps what you were looking at:
 
 - A Mermaid diagram with a syntax error keeps showing its last good drawing,
   dimmed, until it is valid again.
 - `<details>` blocks you opened or closed on the page stay that way.
 
-## Synchronised scrolling
-
-The page scrolls with the cursor. Choose how with `sync_scroll_type`:
-
-| Value                | The page keeps                                          |
-| -------------------- | ------------------------------------------------------- |
-| `"middle"` (default) | the cursor line in the middle of the page               |
-| `"top"`              | the top line of the editor window at the top of the page |
-| `"relative"`         | the cursor line at the same height as in the editor     |
-
-```lua
-opts = { preview_options = { sync_scroll_type = "top" } }
-```
-
-Turn it off with `preview_options = { disable_sync_scroll = 1 }`.
-
-If scrolling lags behind the cursor, lower `'updatetime'`, see the
-[FAQ](../faq.mdx#why-is-the-synchronised-scrolling-lagging).
-
-## Opening and closing automatically
-
-- `auto_start = true` opens the preview whenever you enter a markdown buffer.
-- `auto_close` (on by default) closes the page when you leave its buffer for
-  another one. Turn it off to keep previews open while you work in other
-  files.
-
-## One page for several buffers
-
-By default each buffer gets its own page. To reuse one page:
-
-```lua
-opts = {
-  combine_preview = true,
-  auto_close = false,
-}
-```
-
-`:MarkdownPreview` in another buffer then switches the open page to that
-buffer. With `combine_preview_auto_refresh` (on by default), entering a
-markdown buffer is enough.
-
 ## Page URLs and links between files
 
-A file under the editor's working directory is previewed at its path relative
-to that directory, so `docs/guide.md` opens at:
+A file under the server's root is previewed at its path relative to that
+directory, so `docs/guide.md` opens at:
 
 ```text
 http://localhost:8090/files/docs/guide.md
 ```
 
-The working directory is the one the editor had when the preview server
-started. Files outside it, and buffers without a file, are previewed at
-`/page/<buffer number>` instead.
+The root is the directory the server started in, or the directory given with
+`--root`. A file not under the root is previewed at its full path instead:
+
+```sh
+markdown-preview ~/notes/ideas.md --root ~/notes
+```
 
 Links between markdown files work in the preview. Clicking this one opens the
 page of `docs/guide.md`:
@@ -85,25 +40,22 @@ page of `docs/guide.md`:
 See the [guide](docs/guide.md).
 ```
 
-If the file is open in the editor, the page shows its buffer and follows your edits. Otherwise the file
-is read from disk, as it was saved, without opening it in the editor. Images
-in it are found next to it.
+The file is read from disk, as it was saved. Images in it are found next to
+it.
 
-The URL can only name files inside the working directory: `..`, absolute
-paths, and symlinks that point elsewhere give a 404. Files that aren't
-markdown aren't shown, except images, audio and video, which a page may link
-to.
+The URL can only name files inside the root: `..`, absolute paths, and
+symlinks that point elsewhere give a 404. Files that aren't markdown aren't
+shown, except images, audio and video, which a page may link to.
 
 ## The page
 
 - The header shows the file name. Hide it with
-  `preview_options = { disable_filename = 1 }`.
+  `preview_options = { disable_filename = true }`.
 - The tab title is `page_title`, where `${name}` is the file name.
 - The sun or moon button in the header switches between the light and
   dark theme.
 - The header says "Disconnected" when the page loses its connection to the
-  editor (it reconnects by itself), and "Preview stopped" after
-  `:MarkdownPreviewStop`.
+  server (it reconnects by itself).
 - `preview_options = { content_editable = true }` lets you edit the page to
-  try out wording. The edits are not written to the buffer, and the next
+  try out wording. The edits are not written to the file, and the next
   refresh replaces them.

@@ -1,14 +1,18 @@
-<h1 align="center"> ✨ Markdown Preview for (Neo)vim ✨ </h1>
+<h1 align="center"> ✨ Markdown Preview ✨ </h1>
 
-Preview Markdown in your browser with synchronised scrolling, math, diagrams and
-flexible configuration.
+Preview markdown files in your browser with live updates, math, diagrams and
+flexible configuration — from a single command, no editor required.
+
+```sh
+markdown-preview README.md
+```
 
 ![animation of Markdown Preview with its own README.md](https://user-images.githubusercontent.com/5492542/47603494-28e90000-da1f-11e8-9079-30646e551e7a.gif)
 
 ## Features
 
-- Live updates and synchronised scrolling as you type.
-- Cross platform (macOS, Linux, Windows, FreeBSD), no Node.js required.
+- Live updates as you edit the file, no manual reloading.
+- One self-contained binary, everything embedded: no Node.js at runtime.
 - [Math](https://mkdp.sammaji.com/features/markdown#math) with KaTeX, including chemistry via
   mhchem.
 - [Diagrams](https://mkdp.sammaji.com/features/diagrams): Mermaid (with a full-screen viewer and
@@ -25,183 +29,99 @@ flexible configuration.
 
 ## Installation
 
-Requires Neovim or Vim 8.1+. The plugin downloads a pre-built server binary for
-macOS (x64, arm64), Linux (x64, arm64), FreeBSD (x64) and Windows (x64). If the
-binary is missing or out of date, `:MarkdownPreview` downloads it first, so the
-build hooks below only make the first preview faster.
+### Download a release binary
 
-### [lazy.nvim](https://github.com/folke/lazy.nvim)
+Pre-built binaries are on the
+[releases page](https://github.com/sammaji/markdown-preview.nvim/releases) for:
 
-```lua
-{
-  "sammaji/markdown-preview.nvim",
-  cmd = { "MarkdownPreviewToggle", "MarkdownPreview", "MarkdownPreviewStop" },
-  ft = { "markdown" },
-  opts = {},
-}
+| System  | Architectures |
+| ------- | ------------- |
+| macOS   | x64, arm64    |
+| Linux   | x64, arm64    |
+| FreeBSD | x64           |
+| Windows | x64           |
+
+Download the archive for your system (for example `markdown-preview-macos-arm64.tar.gz`),
+extract it and put the `markdown-preview` binary on your `PATH`:
+
+```sh
+tar -xzf markdown-preview-macos-arm64.tar.gz
+sudo mv markdown-preview-macos-arm64 /usr/local/bin/markdown-preview
 ```
 
-No `build` is needed: lazy.nvim runs the plugin's `build.lua` on install and
-update.
-
-### [packer.nvim](https://github.com/wbthomason/packer.nvim)
-
-```lua
-use({
-  "sammaji/markdown-preview.nvim",
-  cmd = { "MarkdownPreviewToggle", "MarkdownPreview", "MarkdownPreviewStop" },
-  ft = { "markdown" },
-  run = function() vim.fn["mkdp#util#install_sync"]() end,
-})
-```
-
-### [vim-plug](https://github.com/junegunn/vim-plug)
-
-```vim
-Plug 'sammaji/markdown-preview.nvim', { 'do': { -> mkdp#util#install_sync() }, 'for': ['markdown', 'vim-plug'] }
-```
-
-### [nixvim](https://nix-community.github.io/nixvim/index.html)
-
-You can leverage the existing `markdown-preview` plugin, replacing its package with one built from this repository.
-
-```nix
-{ lib, pkgs, ... }:
-let
-  version = "0.2.0";
-  binaryName = "markdown-preview-macos-arm64";
-  # For v2.0.0. Otherwise use `nurl` to regenerate the rev and hash for the latest release.
-  markdownPreviewSrc = pkgs.fetchFromGitHub {
-    owner = "sammaji";
-    repo = "markdown-preview.nvim";
-    rev = "ab85014cff9baadd49d4d9f495720658af64a158";
-    hash = "sha256-qbTlHtcyZxPl/UeMWgpLEi7xSQtmT/pnqp4NQoy2Byo=";
-  };
-  serverArchive = pkgs.fetchurl {
-    url = "https://github.com/sammaji/markdown-preview.nvim/releases/download/v${version}/${binaryName}.tar.gz";
-    hash = lib.fakeHash;
-  };
-  markdownPreview = pkgs.vimUtils.buildVimPlugin {
-    pname = "markdown-preview-sammaji";
-    inherit version;
-    src = markdownPreviewSrc;
-    postInstall = ''
-      mkdir -p "$out/app/bin"
-      tar -xzf ${serverArchive} -C "$out/app/bin"
-      chmod +x "$out/app/bin/${binaryName}"
-    '';
-    doCheck = false;
-  };
-in
-{
-  programs.nixvim = {
-    plugins.markdown-preview = {
-      enable = true;
-      package = markdownPreview;
-
-      settings = {
-        command_for_global = 1;
-      };
-    };
-  };
-}
-```
-
-Upon first build, this will fail because of the `fakeHash` in the `serverArchive`, with an error message containing:
-
-```bash
-error: hash mismatch in fixed-output derivation ...
-  specified: sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
-     got:    <actual-hash>
-```
-
-Just replace the `fakeHash` with the actual hash from the error message and rebuild. You'll be good to go.
-
-### Other plugin managers
-
-- [mini.deps](https://mkdp.sammaji.com/installation#minideps)
-- [vim.pack (Neovim 0.12+)](https://mkdp.sammaji.com/installation#vimpack-neovim-012)
-- [dein.vim](https://mkdp.sammaji.com/installation#deinvim)
-- [Native packages, without a plugin manager](https://mkdp.sammaji.com/installation#native-packages-without-a-plugin-manager)
-- [Moving from iamcco/markdown-preview.nvim](https://mkdp.sammaji.com/installation#moving-from-iamccomarkdown-previewnvim)
+On Windows, extract `markdown-preview-win.zip` and add the folder to `PATH`.
 
 ### Building from source
 
-On a platform without a pre-built binary, or to run your own build:
-
 ```sh
+git clone https://github.com/sammaji/markdown-preview.nvim.git
+cd markdown-preview.nvim
 cargo build --release
 ```
 
-in the plugin directory. This needs Rust 1.86+ and Node.js 20.9+ with pnpm or
-npx. A `target/release` build is always used before a downloaded binary. Run
-`:checkhealth mkdp` to see which binary is used.
+The binary is at `target/release/markdown-preview`. This needs
+[Rust](https://rustup.rs) 1.86+ and Node.js 20.9+ with pnpm or npx (Node.js is
+only needed to build the preview page, which is embedded into the binary — it
+is not needed to run it).
 
-See [Installation](https://mkdp.sammaji.com/installation) for the details of each.
+## Quickstart
 
-## Usage
-
-| Command                  | Description                            |
-| ------------------------ | -------------------------------------- |
-| `:MarkdownPreview`       | Open the preview of the current buffer |
-| `:MarkdownPreviewStop`   | Stop the preview                       |
-| `:MarkdownPreviewToggle` | Open or stop the preview               |
-
-Each command has a `<Plug>` mapping of the same name, e.g.
-`<Plug>MarkdownPreviewToggle`. To map a key with lazy.nvim:
-
-```lua
-{
-  "sammaji/markdown-preview.nvim",
-  -- ...
-  keys = {
-    { "<leader>mp", "<cmd>MarkdownPreviewToggle<cr>", ft = "markdown", desc = "Markdown preview" },
-  },
-}
+```sh
+markdown-preview README.md
 ```
 
-To see every feature, open [`examples/features.md`](examples/features.md) and
-preview it. See [Quickstart](https://mkdp.sammaji.com/quickstart).
+The server prints the preview URL and opens it in your browser:
+
+```text
+http://localhost:8123/files/README.md
+```
+
+Edit `README.md` in any editor and the page updates by itself. Press `Ctrl-C`
+to stop the server. Use `--no-open` to print the URL without opening a
+browser.
+
+To see every feature, preview [`examples/features.md`](examples/features.md).
+
+## Command-line usage
+
+```text
+markdown-preview [flags] [files...]
+```
+
+| Flag                | Description                                                                 |
+| ------------------- | --------------------------------------------------------------------------- |
+| `[files...]`        | Markdown files to preview; each gets its own page and URL                   |
+| `--config <path>`   | Config file to read; default `markdown-preview.toml` in the current directory |
+| `--port <n>`        | Port to serve on; the next free port is used when the first 20 are taken    |
+| `--root <dir>`      | Directory the previewed files must live under; default the current directory |
+| `--browser <cmd...>`| Browser to open the URL in; a name, or a command with its arguments          |
+| `--no-open`         | Print the URL but do not open a browser                                     |
+| `--version`         | Print the version                                                           |
 
 ## Configuration
 
-In Neovim, pass options to `setup()`, or to lazy.nvim's `opts`, named like the
-`g:mkdp_*` variables without the prefix:
+Options live in a `markdown-preview.toml` next to where you run the server, or
+in a file named with `--config`:
 
-```lua
-{
-  "sammaji/markdown-preview.nvim",
-  -- ...
-  opts = {
-    -- "dark" or "light"; by default the page follows the system
-    theme = "dark",
-    -- a browser name, or a command with arguments; the URL is appended
-    browser = { "firefox", "--new-window" },
-    -- keep the page open when you switch to another buffer
-    auto_close = false,
-    -- a shadcn/ui or tweakcn theme
-    theme_css = vim.fn.expand("~/.config/nvim/mkdp-theme.css"),
-    preview_options = {
-      -- "middle", "top" or "relative"
-      sync_scroll_type = "top",
-      -- YAML front matter: "hide", "panel" or "raw"
-      front_matter = "panel",
-    },
-  },
-}
+```toml
+# "dark" or "light"; by default the page follows the system
+theme = "dark"
+# a browser name, or a command with arguments; the URL is appended
+browser = ["firefox", "--new-window"]
+# listen on all interfaces, so other devices can open the preview
+open_to_the_world = true
+# directory relative image paths are resolved against
+images_path = "assets"
+
+[preview_options]
+# YAML front matter: "hide", "panel" or "raw"
+front_matter = "panel"
 ```
 
-In Vim, set the variables before the plugin loads:
-
-```vim
-let g:mkdp_theme = 'dark'
-let g:mkdp_browser = ['firefox', '--new-window']
-let g:mkdp_auto_close = 0
-let g:mkdp_preview_options = { 'sync_scroll_type': 'top' }
-```
-
-See the [configuration reference](https://mkdp.sammaji.com/configuration) for every option, and
-[Theming](https://mkdp.sammaji.com/features/themes) for styling the page.
+Command-line flags override the config file. See the
+[configuration reference](https://mkdp.sammaji.com/configuration) for every
+option, and [Theming](https://mkdp.sammaji.com/features/themes) for styling the
+page.
 
 ## Documentation
 
@@ -226,7 +146,7 @@ The documentation is at [mkdp.sammaji.com](https://mkdp.sammaji.com).
 <a href="https://www.star-history.com/?repos=sammaji%2Fmarkdown-preview.nvim&type=date&legend=top-left">
  <picture>
    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=sammaji/markdown-preview.nvim&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sammaji/markdown-preview.nvim&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=sammaji/markdown-preview.nvim&type=date&theme=light&legend=top-left" />
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=sammaji/markdown-preview.nvim&type=date&legend=top-left" />
  </picture>
 </a>

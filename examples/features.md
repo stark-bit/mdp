@@ -5,8 +5,9 @@ description: This front matter is hidden in the preview; set the preview option 
 
 # Feature tour
 
-Open this file and run `:MarkdownPreview`. Every section below shows one
-feature of the preview; move the cursor around to watch the page follow it.
+Preview this file with `markdown-preview examples/features.md`. Every section
+below shows one feature of the preview; edit and save to watch the page
+update.
 
 ${toc}
 
@@ -77,12 +78,9 @@ Sync scroll
 Fenced code is highlighted by highlight.js:
 
 ```lua
--- lazy.nvim
-{
-  "sammaji/markdown-preview.nvim",
-  cmd = { "MarkdownPreviewToggle", "MarkdownPreview", "MarkdownPreviewStop" },
-  ft = { "markdown" },
-}
+-- tables are the only data structure in Lua
+local preview = { theme = "dark", port = 8090 }
+preview.files = { "README.md" }
 ```
 
 ```rust
@@ -93,8 +91,8 @@ fn main() {
 ```
 
 ```diff
-- build = "cd app && npm install"
-+ build = "cargo build --release"
+- theme = "light"
++ theme = "dark"
 ```
 
 ## Emoji and footnotes

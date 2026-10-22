@@ -34,13 +34,10 @@ A code block without a language is drawn as Mermaid too when its first line is
 Mermaid uses its dark theme when the page is dark. Other [Mermaid
 options](https://mermaid.js.org/config/schema-docs/config.html) go in `maid`:
 
-```lua
-opts = {
-  preview_options = {
-    -- ELK lays out large, dense graphs more cleanly
-    maid = { layout = "elk" },
-  },
-}
+```toml
+[preview_options.maid]
+# ELK lays out large, dense graphs more cleanly
+layout = "elk"
 ```
 
 ### Full-screen viewer
@@ -115,12 +112,10 @@ PlantUML diagrams are drawn by a PlantUML server, `https://www.plantuml.com`
 by default, which sees the diagram's source. To use your own server, or SVG
 images:
 
-```lua
-opts = {
-  preview_options = {
-    uml = { server = "http://localhost:8080", imageFormat = "svg" },
-  },
-}
+```toml
+[preview_options.uml]
+server = "http://localhost:8080"
+imageFormat = "svg"
 ```
 
 ## flowchart.js

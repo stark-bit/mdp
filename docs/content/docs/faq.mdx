@@ -3,40 +3,29 @@ title: FAQ
 description: Answers to common questions.
 ---
 
-## Why is the synchronised scrolling lagging?
+## The page does not update
 
-Part of the refreshes are triggered by `CursorHold`, which waits `updatetime`
-milliseconds after the cursor stops. Set it to a lower value:
+The server watches the file on disk and pushes every change to the page.
 
-```lua
-vim.opt.updatetime = 100
-```
+- Make sure the file you edit is the one you passed to `markdown-preview`.
+- The page follows the file on disk. Changes you have not saved are not
+  previewed.
+- The file must stay under the server's root (the directory it started in, or
+  `--root`). A page that moved out of it stops refreshing.
 
-## The page does not update after a plugin or command changes the buffer
+## The preview URL gives a 404
 
-The page refreshes on edits and cursor moves in the previewed buffer. A change
-made by a script without moving the cursor, or in a hidden buffer, shows up
-on the next cursor move in that buffer.
+The URL names the file's path relative to the server's root, and the server
+only serves files under it. Run `markdown-preview` from the directory that
+contains the file, or point `--root` at it. `..`, absolute paths and symlinks
+that leave the root give a 404 by design.
 
-## `:MarkdownPreview` is not an editor command
+## The port I asked for is not used
 
-The commands are only defined in buffers whose filetype is in `filetypes`
-(`markdown` by default). Check `:set filetype?`, add the filetype:
-
-```lua
-opts = { filetypes = { "markdown", "vimwiki" } }
-```
-
-or make the commands available everywhere with `command_for_global = true`.
-
-## The server binary does not download
-
-The download needs `curl` or `wget` (PowerShell on Windows) and access to
-GitHub. `:checkhealth mkdp` shows what is installed. You can:
-
-- run `:call mkdp#util#install()` to try again and see the error, or
-- [build the server from source](./installation.mdx#building-from-source), which
-  never downloads anything.
+With `--port` (or `port` in the config file), the server tries the next 20
+ports when yours is taken — the printed URL shows the one it got. Pin the
+port for SSH forwarding by freeing it first; the server exits with an error
+when all 20 are taken.
 
 ## How do I change between the dark and light theme?
 
@@ -62,8 +51,8 @@ See [WSL](./features/browser.mdx#wsl).
 
 ## How do I preview a file on a remote machine?
 
-Forward the preview's port over SSH, see [Remote
-machines](./features/browser.mdx#remote-machines).
+Run the server there with `--no-open`, forward the preview's port over SSH,
+see [Remote machines](./features/browser.mdx#remote-machines).
 
 ## How do I open the preview on my phone?
 
@@ -77,11 +66,11 @@ the [Chart.js migration guide](https://www.chartjs.org/docs/latest/migration/v3-
 
 ## Where is the log?
 
-In the system temp directory, named `mkdp-nvim-<uid>.log` (`mkdp-nvim.log` on
-Windows). Once it passes 1 MB the log moves to `mkdp-nvim-<uid>.1.log`, and
-back again when that one fills up, so look at the newer of the two. For more
-detail, start the editor with:
+In the system temp directory, named `markdown-preview-<uid>.log`
+(`markdown-preview.log` on Windows). Once it passes 1 MB the log moves to
+`markdown-preview-<uid>.1.log`, and back again when that one fills up, so
+look at the newer of the two. For more detail, start the server with:
 
 ```sh
-NVIM_MKDP_LOG_LEVEL=debug NVIM_MKDP_LOG_FILE=/tmp/mkdp.log nvim file.md
+MP_LOG_LEVEL=debug MP_LOG_FILE=/tmp/markdown-preview.log markdown-preview note.md
 ```

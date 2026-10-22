@@ -118,8 +118,9 @@ change it:
 - `"panel"` shows it in a collapsed panel above the document
 - `"raw"` renders it as markdown
 
-```lua
-opts = { preview_options = { front_matter = "panel" } }
+```toml
+[preview_options]
+front_matter = "panel"
 ```
 
 ## Raw HTML
@@ -127,8 +128,9 @@ opts = { preview_options = { front_matter = "panel" } }
 HTML in the markdown file is rendered, including `<details>`, `<kbd>` and
 `<img>`. To preview files you don't trust, turn it off:
 
-```lua
-opts = { preview_options = { mkit = { html = false } } }
+```toml
+[preview_options.mkit]
+html = false
 ```
 
 `mkit` takes any [markdown-it

@@ -6,7 +6,7 @@ import './global.css';
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: { template: `%s | ${appName}`, default: appName },
-  description: 'Preview markdown in your browser from Neovim and Vim.',
+  description: 'Preview markdown files in your browser with live updates, math, diagrams and themes.',
 };
 
 export default function Layout({ children }: LayoutProps<'/'>) {

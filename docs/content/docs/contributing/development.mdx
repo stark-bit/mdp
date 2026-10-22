@@ -1,6 +1,6 @@
 ---
 title: Development setup
-description: Build the plugin and run your checkout.
+description: Build the server from your checkout and try your changes.
 ---
 
 ## Requirements
@@ -8,7 +8,6 @@ description: Build the plugin and run your checkout.
 - [Rust](https://rustup.rs) 1.86 or newer
 - Node.js 20.9 or newer with [pnpm](https://pnpm.io) (or npx, which fetches
   pnpm)
-- Neovim, and Vim 8.1+ (the tests run both)
 
 ## Build
 
@@ -20,47 +19,31 @@ cargo build --release
 
 `cargo build` also builds the page (`app/`) whenever a file in it changed, and
 installs its dependencies first if `app/node_modules` is missing. The page is
-embedded into the binary, so the binary is all the plugin needs at runtime. To
-skip the page build and reuse the existing `app/out`, set
-`MKDP_SKIP_PAGE_BUILD=1`.
+embedded into the binary. To skip the page build and reuse the existing
+`app/out`, set `MKDP_SKIP_PAGE_BUILD=1`.
 
 ## Run your checkout
 
-Load your checkout instead of the published plugin. With lazy.nvim:
-
-```lua
-{
-  dir = "~/path/to/markdown-preview.nvim",
-  name = "markdown-preview.nvim",
-  cmd = { "MarkdownPreviewToggle", "MarkdownPreview", "MarkdownPreviewStop" },
-  ft = { "markdown" },
-  build = "cargo build --release",
-}
-```
-
-Or without a plugin manager:
-
 ```sh
-nvim --cmd 'set rtp^=~/path/to/markdown-preview.nvim' examples/features.md
+./target/release/markdown-preview README.md
 ```
 
-A build in `target/release` is used before a downloaded binary.
-`:checkhealth mkdp` shows which binary is used.
+or put the binary on your `PATH` to use it as an installed one.
 
 ## Making changes
 
-| You changed         | To see it                                                                            |
-| ------------------- | ------------------------------------------------------------------------------------ |
-| `src/` (the server) | `cargo build --release`, then `:MarkdownPreviewStop` and `:MarkdownPreview`           |
-| `app/` (the page)   | the same: the page is embedded in the binary                                         |
-| Vim script or Lua   | restart the editor                                                                   |
+| You changed          | To see it                                                        |
+| -------------------- | ---------------------------------------------------------------- |
+| `src/` (the server)  | `cargo build --release`, then restart the server                 |
+| `app/` (the page)    | the same: the page is embedded in the binary                     |
 
-Each editor keeps its server running, so an open preview uses the old binary
-until you stop it.
+The page is embedded at compile time, so a rebuilt binary always carries the
+current page.
 
 To work on the page with hot reload, run `pnpm dev` in `app/`. It serves the
-page without a server, so it shows "Open this page with :MarkdownPreview";
-this is useful for styling, less so for anything that needs a buffer.
+page without a server, so it shows "Open this page by running the preview
+server on a markdown file."; this is useful for styling, less so for anything
+that needs a live connection.
 
 [`examples/features.md`](https://github.com/sammaji/markdown-preview.nvim/blob/master/examples/features.md) uses every feature; preview it
 to check a change by eye.
@@ -104,28 +87,28 @@ and the tests, see [Testing](./testing.mdx).
 
 ## Debugging
 
-Start the editor with debug logging:
+Start the server with debug logging:
 
 ```sh
-NVIM_MKDP_LOG_LEVEL=debug NVIM_MKDP_LOG_FILE=/tmp/mkdp.log nvim examples/features.md
+MP_LOG_LEVEL=debug MP_LOG_FILE=/tmp/mkdp.log ./target/release/markdown-preview examples/features.md
 ```
 
 and follow the log with `tail -f /tmp/mkdp.log`. Without these variables, the
-log is `mkdp-nvim-<uid>.log` or `mkdp-nvim-<uid>.1.log`, whichever is newer
-(`mkdp-nvim.log` on Windows), in the system temp directory, and debug logging
-without `NVIM_MKDP_LOG_FILE` writes a new
-`mkdp-nvim-<uid>.debug-<time>-<pid>.log` for each session. The page logs to
-the browser console.
+log is `markdown-preview-<uid>.log` or `markdown-preview-<uid>.1.log`,
+whichever is newer (`markdown-preview.log` on Windows), in the system temp
+directory, and debug logging without `MP_LOG_FILE` writes a new
+`markdown-preview-<uid>.debug-<time>-<pid>.log` for each session. The page
+logs to the browser console.
 
-The server talks to the editor over stdout, so never print to stdout or
-stderr from it; use the `info!`, `debug!` and `error!` macros from
-`src/logger.rs`.
+The URL is printed on stdout; log lines go to the log file, not to stdout.
+Use the `info!`, `debug!` and `error!` macros from `src/logger.rs`.
 
 ## Project conventions
 
 - Tests live in their own files: `src/<module>_test.rs` next to the module,
-  `app/test/`, `e2e/tests/`. Application files only include them with
-  `#[cfg(test)] #[path = "<module>_test.rs"] mod tests;`.
+  `tests/` for the binary, `app/test/`, `e2e/tests/`. Application files only
+  include them with `#[cfg(test)] #[path = "<module>_test.rs"] mod tests;`.
 - Comments explain why, not what.
-- Options are `g:mkdp_*` variables, read by the server with `get_var` when
-  they are used, so they can change while the editor runs.
+- Options are config file keys and command-line flags, read once at startup
+  by `src/config.rs`; new options go in [the configuration
+  reference](../configuration.mdx).

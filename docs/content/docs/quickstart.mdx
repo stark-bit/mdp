@@ -1,93 +1,83 @@
 ---
 title: Quickstart
-description: Install the plugin, open your first preview and change the settings most people change.
+description: Install the server, open your first preview and change the settings most people change.
 ---
 
 ## Requirements
 
-- Neovim, or Vim 8.1+
 - A web browser
+- A pre-built server binary, or [Rust](https://rustup.rs) to build one
 
-Node.js is not needed. The plugin runs a small server binary, which it
-downloads for macOS (x64, arm64), Linux (x64, arm64), FreeBSD (x64) and
-Windows (x64). On other systems, [build it from
-source](./installation.mdx#building-from-source).
+Node.js is not needed to run the preview.
 
 ## Install
 
-With [lazy.nvim](https://github.com/folke/lazy.nvim):
+Download the release for your system from the
+[releases page](https://github.com/sammaji/markdown-preview.nvim/releases) and
+put the binary on your `PATH`:
 
-```lua
-{
-  "sammaji/markdown-preview.nvim",
-  cmd = { "MarkdownPreviewToggle", "MarkdownPreview", "MarkdownPreviewStop" },
-  ft = { "markdown" },
-  keys = {
-    { "<leader>mp", "<cmd>MarkdownPreviewToggle<cr>", ft = "markdown", desc = "Markdown preview" },
-  },
-}
+```sh
+tar -xzf markdown-preview-macos-arm64.tar.gz
+sudo mv markdown-preview-macos-arm64 /usr/local/bin/markdown-preview
 ```
 
-lazy.nvim downloads the server when it installs or updates the plugin. For
-other plugin managers, see [Installation](./installation.mdx).
+macOS, Linux (x64 and arm64), FreeBSD (x64) and Windows (x64) have pre-built
+binaries. On other systems, or to run your own build:
+
+```sh
+cargo build --release
+```
+
+in a checkout of this repository. See
+[Installation](./installation.mdx) for the details of each.
 
 ## Open a preview
 
-Open a markdown file and run `:MarkdownPreview`, or press `<leader>mp` with the
-mapping above. The preview opens in your browser, follows your edits as you
-type and scrolls along with the cursor.
+```sh
+markdown-preview README.md
+```
 
-| Command                  | What it does                           |
-| ------------------------ | -------------------------------------- |
-| `:MarkdownPreview`       | Open the preview of the current buffer |
-| `:MarkdownPreviewStop`   | Stop the preview                       |
-| `:MarkdownPreviewToggle` | Open or stop the preview               |
+The server prints the preview URL and opens it in your browser:
 
-To see every feature at once, open
-[`examples/features.md`](https://github.com/sammaji/markdown-preview.nvim/blob/master/examples/features.md) from the plugin directory and
-preview it.
+```text
+http://localhost:8123/files/README.md
+```
+
+Edit `README.md` in any editor and save — the page updates by itself, without
+a reload. Press `Ctrl-C` to stop the server.
+
+Use `--no-open` to only print the URL, and `--port 8090` to pin the port.
+
+To see every feature at once, preview
+[`examples/features.md`](https://github.com/sammaji/markdown-preview.nvim/blob/master/examples/features.md).
 
 ## Change a few settings
 
-In Neovim, pass options to `setup()`; lazy.nvim does that for you with
-`opts`:
+Options live in `markdown-preview.toml` in the directory you run the server
+from:
 
-```lua
-{
-  "sammaji/markdown-preview.nvim",
-  -- ...
-  opts = {
-    -- always use the dark theme instead of following the system
-    theme = "dark",
-    -- open the preview in this browser instead of the default one
-    browser = "firefox",
-    -- keep the top of the editor window at the top of the page
-    preview_options = { sync_scroll_type = "top" },
-    -- keep the page open when you switch to another buffer
-    auto_close = false,
-  },
-}
-```
+```toml
+# always use the dark theme instead of following the system
+theme = "dark"
+# open the preview in this browser instead of the default one
+browser = "firefox"
 
-In Vim, set the same options as `g:mkdp_*` variables before the plugin loads:
-
-```vim
-let g:mkdp_theme = 'dark'
-let g:mkdp_browser = 'firefox'
-let g:mkdp_preview_options = { 'sync_scroll_type': 'top' }
-let g:mkdp_auto_close = 0
+[preview_options]
+front_matter = "panel"
 ```
 
 Every option is in the [configuration reference](./configuration.mdx).
 
 ## When something is wrong
 
-Run `:checkhealth mkdp` in Neovim. It shows which server binary is used and
-whether it matches the plugin.
+Run the server with debug logging and look at the log file:
+
+```sh
+MP_LOG_LEVEL=debug markdown-preview README.md
+```
 
 Common questions:
 
-- [The scrolling lags behind the cursor](./faq.mdx#why-is-the-synchronised-scrolling-lagging)
 - [The browser does not open in WSL](./features/browser.mdx#wsl)
 - [Previewing a file on a remote machine](./features/browser.mdx#remote-machines)
 - [Using my own look for the page](./features/themes.mdx)

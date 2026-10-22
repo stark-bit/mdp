@@ -52,7 +52,7 @@ const SITE = "https://mkdp.sammaji.com";
 
 /** The markdown files users read: the site's pages and the repository's own. */
 function docPages() {
-  const pages = ["README.md", "CONTRIBUTING.md", "skip-test-case.md"];
+  const pages = ["README.md", "CONTRIBUTING.md"];
   const walk = (dir: string) => {
     for (const entry of readdirSync(join(REPO, dir), { withFileTypes: true })) {
       const path = `${dir}/${entry.name}`;
