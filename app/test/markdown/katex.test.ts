@@ -26,7 +26,7 @@ describe("KaTeX", () => {
     expect(display).not.toBeNull();
     expect(display!.querySelector('math[display="block"]')).not.toBeNull();
     expect(tex(display)).toBe("\\int_0^1 x \\, dx");
-    expect(root.querySelector("p.source-line")?.textContent).toBe("after");
+    expect(root.querySelectorAll("p")[1]?.textContent).toBe("after");
   });
 
   test("renders single-line $$block$$ math", () => {

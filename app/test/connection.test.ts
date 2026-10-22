@@ -35,7 +35,7 @@ class FakeWebSocket {
 const sockets = () => FakeWebSocket.instances;
 const latest = () => sockets()[sockets().length - 1];
 
-function setup(protocol = "http:", host = "localhost:8090", page = "/page/3") {
+function setup(protocol = "http:", host = "localhost:8090", page = "/files/3.md") {
   vi.stubGlobal("window", { location: { protocol, host } });
   const onMessage = vi.fn<(message: ServerMessage) => void>();
   const onStatus = vi.fn<(connected: boolean) => void>();
@@ -71,9 +71,9 @@ afterEach(() => {
 
 describe("connect", () => {
   test("opens ws://host/ws?path=<page>", () => {
-    setup("http:", "localhost:8090", "/page/7");
+    setup("http:", "localhost:8090", "/files/7.md");
     expect(sockets()).toHaveLength(1);
-    expect(latest().url).toBe("ws://localhost:8090/ws?path=%2Fpage%2F7");
+    expect(latest().url).toBe("ws://localhost:8090/ws?path=%2Ffiles%2F7.md");
   });
 
   test("passes a /files/ page's path encoded", () => {
@@ -82,8 +82,8 @@ describe("connect", () => {
   });
 
   test("uses wss:// when the page is served over https", () => {
-    setup("https:", "preview.example.com", "/page/12");
-    expect(latest().url).toBe("wss://preview.example.com/ws?path=%2Fpage%2F12");
+    setup("https:", "preview.example.com", "/files/12.md");
+    expect(latest().url).toBe("wss://preview.example.com/ws?path=%2Ffiles%2F12.md");
   });
 
   test("reports the connection status", () => {
@@ -99,30 +99,35 @@ describe("connect", () => {
   test("passes parsed messages on", () => {
     const { onMessage } = setup();
     latest().open();
-    const message = { type: "change_bufnr", bufnr: 4, path: "/page/4" } as const;
+    const message = {
+      type: "refresh_content",
+      data: {
+        options: {},
+        pageTitle: "t",
+        theme: "light",
+        name: "3.md",
+        content: ["hi"],
+      },
+    } as const;
     latest().send(message);
     expect(onMessage).toHaveBeenCalledExactlyOnceWith(message);
   });
 
   test("ignores invalid JSON and keeps going", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { onMessage, onStatus } = setup();
+    const { onMessage } = setup();
     latest().open();
     expect(() => latest().send("{not json")).not.toThrow();
     expect(onMessage).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledOnce();
     expect(latest().closeCalls).toBe(0);
-
-    latest().send({ type: "close_page" });
-    expect(onMessage).toHaveBeenCalledExactlyOnceWith({ type: "close_page" });
-    expect(onStatus).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   test("reconnects with a backoff doubling from 500ms up to 5s", () => {
     setup();
     const delays = Array.from({ length: 7 }, () => reconnectDelay());
     expect(delays).toEqual([500, 1000, 2000, 4000, 5000, 5000, 5000]);
-    expect(sockets().every((socket) => socket.url === "ws://localhost:8090/ws?path=%2Fpage%2F3")).toBe(true);
+    expect(sockets().every((socket) => socket.url === "ws://localhost:8090/ws?path=%2Ffiles%2F3.md")).toBe(true);
   });
 
   test("resets the backoff after a successful connection", () => {
@@ -132,21 +137,13 @@ describe("connect", () => {
     expect([reconnectDelay(), reconnectDelay()]).toEqual([500, 1000]);
   });
 
-  test("does not reconnect after close_page", () => {
-    const { onMessage, onStatus } = setup();
-    latest().open();
-    latest().send({ type: "close_page" });
-    expect(onMessage).toHaveBeenCalledWith({ type: "close_page" });
-    latest().drop();
-    expect(onStatus).toHaveBeenLastCalledWith(false);
-    vi.advanceTimersByTime(60_000);
-    expect(sockets()).toHaveLength(1);
-  });
-
   test("other messages do not stop reconnecting", () => {
     setup();
     latest().open();
-    latest().send({ type: "change_bufnr", bufnr: 1, path: "/page/1" });
+    latest().send({
+      type: "refresh_content",
+      data: { options: {}, pageTitle: "", theme: "", name: "", content: [] },
+    });
     expect(reconnectDelay()).toBe(500);
   });
 

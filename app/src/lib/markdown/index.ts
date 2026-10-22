@@ -13,7 +13,6 @@ import fence from "./fence";
 import frontMatter, { frontMatterMode } from "./front-matter";
 import images from "./images";
 import katex from "./katex";
-import lineNumbers from "./line-numbers";
 import plantuml from "./plantuml";
 import { escapeHtml } from "./utils";
 
@@ -41,7 +40,7 @@ const DEFAULT_MKIT: MarkdownItOptions = {
   },
 };
 
-/** Builds the markdown renderer configured by `g:mkdp_preview_options`. */
+/** Builds the markdown renderer from the preview options. */
 export function createRenderer(options: PreviewOptions): MarkdownIt {
   const md = markdownIt({ ...DEFAULT_MKIT, ...options.mkit });
 
@@ -57,7 +56,6 @@ export function createRenderer(options: PreviewOptions): MarkdownIt {
     .use(footnote)
     .use(alerts)
     .use(images)
-    .use(lineNumbers)
     .use(fence, options.uml)
     .use(anchor, {
       permalink: anchor.permalink.linkInsideHeader({

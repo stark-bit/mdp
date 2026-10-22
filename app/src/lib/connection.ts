@@ -5,7 +5,7 @@ const MAX_RETRY_MS = 5000;
 
 /**
  * Subscribes to the preview updates of the page at url path `page`
- * (`/page/<bufnr>` or `/files/<path>`), reconnecting if the connection drops.
+ * (`/files/<path>`), reconnecting if the connection drops.
  * Returns a function that closes the connection.
  */
 export function connect(
@@ -35,8 +35,6 @@ export function connect(
         console.error("invalid message from preview server", error);
         return;
       }
-      // the preview was stopped in the editor: don't come back
-      if (message.type === "close_page") closed = true;
       onMessage(message);
     };
     socket.onclose = () => {

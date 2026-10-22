@@ -57,13 +57,6 @@ describe("YAML front matter", () => {
     expect(root.textContent).toContain("title: visible");
     expect(root.textContent).toContain("Body");
   });
-
-  test("keeps the source lines of the content after it", () => {
-    const root = render(DOC);
-    // 0-based: the heading is on the 6th line
-    expect(root.querySelector("h1")?.dataset.sourceLine).toBe("5");
-    expect(root.querySelector("p")?.dataset.sourceLine).toBe("7");
-  });
 });
 
 describe("front_matter option", () => {
@@ -99,12 +92,6 @@ describe("front_matter option", () => {
     const root = render('---\nx: "<img src=x onerror=alert(1)>"\n---\n', { front_matter: "panel" });
     expect(root.querySelector("img")).toBeNull();
     expect(root.querySelector("details code")?.textContent).toContain("<img src=x");
-  });
-
-  test('"panel" keeps the source lines after it', () => {
-    const root = render(DOC, { front_matter: "panel" });
-    expect(root.querySelector<HTMLElement>("details")?.dataset.sourceLine).toBe("0");
-    expect(root.querySelector("h1")?.dataset.sourceLine).toBe("5");
   });
 
   test("an empty block gives an empty panel", () => {

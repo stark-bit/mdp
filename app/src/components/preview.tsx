@@ -5,20 +5,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { connect } from "@/lib/connection";
 import { replaceKeepingDetails } from "@/lib/details";
-import {
-  forgetDiagrams,
-  renderDiagrams,
-  themeColors,
-  type Theme,
-} from "@/lib/diagrams";
+import { renderDiagrams, themeColors, type Theme } from "@/lib/diagrams";
 import { createRenderer } from "@/lib/markdown";
 import type { UmlColors } from "@/lib/markdown/plantuml";
-import type {
-  PreviewData,
-  PreviewOptions,
-  ServerMessage,
-} from "@/lib/protocol";
-import { syncScroll } from "@/lib/scroll";
+import type { PreviewData, PreviewOptions, ServerMessage } from "@/lib/protocol";
 
 import { ThemeToggle } from "./theme-toggle";
 
@@ -32,10 +22,10 @@ interface Header {
 // how long to wait for more keystrokes before re-rendering
 const RENDER_DEBOUNCE_MS = 16;
 
-// the url path of a preview page, /page/<bufnr> or /files/<path>, or null
+// the url path of a preview page, /files/<path>, or null
 export function pageFromUrl(): string | null {
   const path = window.location.pathname;
-  return /^\/(page\/\d+|files\/.+)$/.test(path) ? path : null;
+  return /^\/files\/.+$/.test(path) ? path : null;
 }
 
 // file name without directory and extension
@@ -77,9 +67,8 @@ export function Preview() {
   const bodyRef = useRef<HTMLElement>(null);
   const [page, setPage] = useState<string | null>();
   const [connected, setConnected] = useState(true);
-  const [stopped, setStopped] = useState(false);
   const [header, setHeader] = useState<Header>();
-  // g:mkdp_theme until the user picks one with the toggle
+  // server theme until the user picks one with the toggle
   const [editorTheme, setEditorTheme] = useState<Theme>();
   const [chosenTheme, setChosenTheme] = useState<Theme>();
   const theme = chosenTheme ?? editorTheme;
@@ -88,7 +77,6 @@ export function Preview() {
   const options = useRef<PreviewOptions>({});
   const source = useRef<string>(undefined);
   const renderTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const lastScroll = useRef<() => void>(undefined);
   // read by the socket callback, which must not change on every toggle
   const chosenThemeRef = useRef(chosenTheme);
   useEffect(() => {
@@ -106,10 +94,7 @@ export function Preview() {
       body,
       md.current.render(source.current, { umlColors: umlColors() }),
     );
-    lastScroll.current?.();
     await renderDiagrams(body, options.current, theme);
-    // diagrams change the height of the page
-    lastScroll.current?.();
   }, []);
 
   const onRefresh = useCallback(
@@ -129,24 +114,8 @@ export function Preview() {
         editable: Boolean(data.options?.content_editable),
       });
 
-      lastScroll.current = () => {
-        if (!data.isActive || data.options?.disable_sync_scroll) return;
-        const scroll =
-          syncScroll[data.options?.sync_scroll_type ?? "middle"] ??
-          syncScroll.middle;
-        scroll({
-          cursor: data.cursor[1],
-          winline: data.winline,
-          winheight: data.winheight,
-          len: data.content.length,
-        });
-      };
-
       const text = data.content.join("\n");
-      if (text === source.current) {
-        lastScroll.current();
-        return;
-      }
+      if (text === source.current) return;
       const firstRender = source.current === undefined;
       source.current = text;
       clearTimeout(renderTimer.current);
@@ -162,24 +131,7 @@ export function Preview() {
 
   const onMessage = useCallback(
     (message: ServerMessage) => {
-      switch (message.type) {
-        case "refresh_content":
-          onRefresh(message.data);
-          break;
-        case "close_page":
-          setStopped(true);
-          // only works for windows opened by a script
-          window.close();
-          break;
-        case "change_bufnr":
-          // g:mkdp_combine_preview: show another buffer in this page
-          window.history.replaceState(null, "", message.path);
-          source.current = undefined;
-          bodyRef.current?.replaceChildren();
-          forgetDiagrams();
-          setPage(message.path);
-          break;
-      }
+      if (message.type === "refresh_content") onRefresh(message.data);
     },
     [onRefresh],
   );
@@ -206,7 +158,11 @@ export function Preview() {
   };
 
   if (page === null) {
-    return <p className="notice">Open this page with :MarkdownPreview.</p>;
+    return (
+      <p className="notice">
+        Open this page by running the preview server on a markdown file.
+      </p>
+    );
   }
 
   return (
@@ -233,10 +189,8 @@ export function Preview() {
               {header.name}
             </h3>
             <div className="header-actions">
-              {(stopped || !connected) && (
-                <span className="status">
-                  {stopped ? "Preview stopped" : "Disconnected"}
-                </span>
+              {!connected && (
+                <span className="status">Disconnected</span>
               )}
               <ThemeToggle theme={theme ?? "light"} onToggle={toggleTheme} />
             </div>

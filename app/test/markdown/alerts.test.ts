@@ -34,19 +34,6 @@ describe("GitHub alerts", () => {
     expect([...alert.querySelectorAll("li")].map((li) => li.textContent)).toEqual(["a", "b"]);
   });
 
-  test("keeps the source lines for sync scroll", () => {
-    const root = render("Intro\n\n> [!NOTE]\n> Line three\n\n> [!TIP]\n>\n> Line seven");
-    const note = root.querySelector<HTMLElement>(".markdown-alert-note")!;
-    expect(note.dataset.sourceLine).toBe("2");
-    expect(note.querySelector<HTMLElement>("p:not(.markdown-alert-title)")?.dataset.sourceLine).toBe("3");
-    const tip = root.querySelector<HTMLElement>(".markdown-alert-tip")!;
-    expect(tip.dataset.sourceLine).toBe("5");
-    expect(tip.querySelector<HTMLElement>("p:not(.markdown-alert-title)")?.dataset.sourceLine).toBe("7");
-    // every line number is used once, or sync scroll finds the wrong element
-    const lines = [...root.querySelectorAll<HTMLElement>("[data-source-line]")].map((e) => e.dataset.sourceLine);
-    expect(new Set(lines).size).toBe(lines.length);
-  });
-
   test.each([
     ["an unknown type", "> [!DANGER]\n> text"],
     ["text after the marker", "> [!NOTE] inline\n> text"],

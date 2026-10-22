@@ -47,7 +47,7 @@ export default function frontMatterPlugin(
       options.highlight?.(yaml, "yaml", "") ||
       `<pre><code>${escapeHtml(yaml)}</code></pre>`;
     return (
-      `<details class="front-matter source-line" data-source-line="0">\n` +
+      `<details class="front-matter">\n` +
       `<summary>Front matter</summary>\n${code}</details>\n`
     );
   };

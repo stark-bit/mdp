@@ -70,9 +70,8 @@ export default function alertsPlugin(md: MarkdownIt) {
     const kind = token.meta?.alert as string | undefined;
     if (!kind) return renderOpen(tokens, idx, options, env, self);
     const title = kind[0].toUpperCase() + kind.slice(1);
-    const line = token.map ? ` data-source-line="${token.map[0]}"` : "";
     return (
-      `<div class="markdown-alert markdown-alert-${kind} source-line"${line}>\n` +
+      `<div class="markdown-alert markdown-alert-${kind}">\n` +
       `<p class="markdown-alert-title"><svg class="octicon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">` +
       `<path d="${ICONS[kind]}"></path></svg>${escapeHtml(title)}</p>\n`
     );
