@@ -13,7 +13,7 @@ impl TempDir {
             .unwrap()
             .as_nanos();
         let dir = std::env::temp_dir().join(format!(
-            "mkdp-config-test-{}-{}-{nanos}",
+            "mp-config-test-{}-{}-{nanos}",
             std::process::id(),
             COUNT.fetch_add(1, Ordering::Relaxed)
         ));

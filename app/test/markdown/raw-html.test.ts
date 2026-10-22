@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { render } from "../render";
 
-// g:mkdp_preview_options.mkit is passed to markdown-it, so {'html': v:false}
+// the mkit preview option is passed to markdown-it, so {'html': v:false}
 // is the switch for previewing markdown you don't trust
 describe("raw HTML", () => {
   const SRC = "<div class=raw>kept</div>\n\nText with <b>inline</b> and <img src=x onerror=alert(1)>";

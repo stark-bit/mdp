@@ -30,7 +30,7 @@ fn temp_path(name: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "mkdp-test-{}-{}-{nanos}-{name}",
+        "mp-test-{}-{}-{nanos}-{name}",
         std::process::id(),
         COUNT.fetch_add(1, Ordering::Relaxed)
     ))
@@ -41,11 +41,11 @@ impl Server {
     /// url it printed on stdout. `dir` is the working directory, so the
     /// served root; `files` are the positional file arguments.
     fn start(dir: &Path, files: &[&str]) -> (Server, String) {
-        let log = temp_path("mkdp.log");
+        let log = temp_path("mp.log");
         let mut command = Command::new(BIN);
         command
-            .env("NVIM_MKDP_LOG_FILE", &log)
-            .env_remove("NVIM_MKDP_LOG_LEVEL")
+            .env("MP_LOG_FILE", &log)
+            .env_remove("MP_LOG_LEVEL")
             .arg("--no-open")
             .args(files)
             .current_dir(dir)

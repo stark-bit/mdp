@@ -1,6 +1,6 @@
 name: release
 
-# Builds the server for every platform mkdp#util#install() knows about and
+# Builds the server for every platform users download from the GitHub release and
 # attaches the archives to the GitHub release of the pushed tag.
 on:
   push:

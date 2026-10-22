@@ -29,18 +29,18 @@ const KEYS: &[&str] = &[
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct Config {
-    pub open_to_the_world: bool, // mkdp_open_to_the_world
-    pub port: Option<u16>,       // mkdp_port
-    pub browser: BrowserValue,   // mkdp_browser
-    pub open_ip: Option<String>, // mkdp_open_ip
-    pub combine_preview: bool,   // mkdp_combine_preview (temporary)
+    pub open_to_the_world: bool,
+    pub port: Option<u16>,
+    pub browser: BrowserValue,
+    pub open_ip: Option<String>,
+    pub combine_preview: bool, // temporary
     pub images_path: Option<PathBuf>,
     pub markdown_css: Option<PathBuf>,
     pub highlight_css: Option<PathBuf>,
     pub theme_css: Option<PathBuf>,
-    pub theme: String,          // mkdp_theme
-    pub page_title: String,     // mkdp_page_title
-    pub preview_options: Value, // mkdp_preview_options, verbatim for the page
+    pub theme: String,
+    pub page_title: String,
+    pub preview_options: Value, // verbatim for the page
     pub root: Option<PathBuf>,  // --root; None = cwd (resolved in Phase 3)
     pub no_open: bool,          // --no-open
     pub files: Vec<PathBuf>,    // positional args (used from Phase 3)

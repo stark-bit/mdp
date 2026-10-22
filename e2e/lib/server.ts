@@ -61,7 +61,7 @@ export class Server {
 
   static async start(options: StartOptions = {}): Promise<Server> {
     const owned = options.cwd === undefined;
-    const dir = realpathSync(options.cwd ?? mkdtempSync(join(tmpdir(), "mkdp-server-")));
+    const dir = realpathSync(options.cwd ?? mkdtempSync(join(tmpdir(), "mp-server-")));
     for (const [name, content] of Object.entries(options.fixtures ?? {})) {
       const file = join(dir, name);
       mkdirSync(dirname(file), { recursive: true });
@@ -92,8 +92,8 @@ export class Server {
         cwd: dir,
         env: {
           ...process.env,
-          NVIM_MKDP_LOG_FILE: logFile,
-          NVIM_MKDP_LOG_LEVEL: "debug",
+          MP_LOG_FILE: logFile,
+          MP_LOG_LEVEL: "debug",
           ...options.env,
         },
         stdio: ["ignore", "pipe", "pipe"],

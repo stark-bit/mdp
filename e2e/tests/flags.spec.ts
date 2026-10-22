@@ -130,7 +130,7 @@ test.describe("opening the browser", () => {
    * server's PATH, which append their arguments to the returned log.
    */
   async function withFakeOpener(launch: (o: StartOptions) => Promise<Server>, options: StartOptions = {}) {
-    const dir = realpathSync(mkdtempSync(join(tmpdir(), "mkdp-open-")));
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "mp-open-")));
     const log = join(dir, "opened");
     mkdirSync(join(dir, "bin"));
     for (const name of ["open", "xdg-open", "fakebrowser"]) {

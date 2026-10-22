@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Runs every automated test before a release:
-#   server  cargo test: unit tests of src/ and the stdio protocol of the binary
-#   page    vitest in app/: the markdown renderer, connection and sync scroll
-#   e2e     playwright in e2e/: Neovim and Vim drive the release binary and a
-#           browser checks the preview; install and release checks
+#   server  cargo test: unit tests of src/ and the CLI/HTTP/WS protocol of the binary
+#   page    vitest in app/: the markdown renderer and connection
+#   e2e     playwright in e2e/: the release binary and a browser check the
+#           preview; release checks
 #   docs    builds the documentation site in docs/, which fails on broken MDX
 # Runs every suite even when one fails, and exits non-zero if any failed.
 #
@@ -17,7 +17,7 @@ set -uo pipefail
 cd "$(dirname "$0")"
 root=$(pwd)
 
-for tool in cargo pnpm nvim vim; do
+for tool in cargo pnpm; do
   command -v "$tool" >/dev/null || { echo "$tool not found on PATH" >&2; exit 1; }
 done
 

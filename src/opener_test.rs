@@ -100,8 +100,8 @@ fn wsl_falls_back_through_the_openers() {
 #[test]
 fn open_reports_every_command_it_tried() {
     let _ports = crate::server::tests::lock_ports();
-    let missing = Browser::Command(strings(&["mkdp-no-such-browser"]));
+    let missing = Browser::Command(strings(&["mp-no-such-browser"]));
     let err = open(URL, &missing).unwrap_err();
-    assert!(err.contains("mkdp-no-such-browser"), "{err}");
+    assert!(err.contains("mp-no-such-browser"), "{err}");
     assert!(err.contains(URL), "{err}");
 }

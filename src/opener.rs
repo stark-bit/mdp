@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 
 use serde_json::Value;
 
-/// `g:mkdp_browser`.
+/// The `browser` config value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Browser {
     /// The system's default browser.

@@ -22,17 +22,17 @@ static LOGGER: OnceLock<Option<Logger>> = OnceLock::new();
 
 pub fn init() {
     LOGGER.get_or_init(|| {
-        let level = match std::env::var("NVIM_MKDP_LOG_LEVEL").as_deref() {
+        let level = match std::env::var("MP_LOG_LEVEL").as_deref() {
             Ok("debug") => Level::Debug,
             Ok("error") => Level::Error,
             _ => Level::Info,
         };
-        let path = match (std::env::var_os("NVIM_MKDP_LOG_FILE"), level) {
+        let path = match (std::env::var_os("MP_LOG_FILE"), level) {
             (Some(path), Level::Debug) => PathBuf::from(path),
             (None, Level::Debug) => debug_path(),
             (path, _) => active_file(&path.map(PathBuf::from).unwrap_or_else(default_path)),
         };
-        // append mode keeps lines intact when several editor instances log
+        // append mode keeps lines intact when several server instances log
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -62,7 +62,7 @@ fn active_file(path: &Path) -> PathBuf {
 }
 
 /// A file of its own for each debug session, kept after it ends:
-/// `mkdp-nvim-<uid>.debug-<YYYYMMDD-HHMMSS>-<pid>.log`.
+/// `markdown-preview-<uid>.debug-<YYYYMMDD-HHMMSS>-<pid>.log`.
 fn debug_path() -> PathBuf {
     let time: String = timestamp()
         .chars()
@@ -91,9 +91,9 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 fn default_path() -> PathBuf {
     #[cfg(unix)]
     // SAFETY: getuid has no preconditions and cannot fail
-    let name = format!("mkdp-nvim-{}.log", unsafe { libc::getuid() });
+    let name = format!("markdown-preview-{}.log", unsafe { libc::getuid() });
     #[cfg(not(unix))]
-    let name = "mkdp-nvim.log".to_string();
+    let name = "markdown-preview.log".to_string();
     std::env::temp_dir().join(name)
 }
 

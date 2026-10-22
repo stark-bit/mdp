@@ -172,7 +172,7 @@ impl App {
     }
 
     fn cookie_name(&self) -> String {
-        format!("mkdp_token_{}", self.port)
+        format!("mp_token_{}", self.port)
     }
 
     fn authorized(&self, uri: &Uri, headers: &HeaderMap) -> bool {
@@ -734,7 +734,7 @@ fn is_media(path: &Path) -> bool {
 fn unauthorized() -> Response {
     (
         StatusCode::UNAUTHORIZED,
-        "markdown-preview.nvim: open the preview from the editor, this link is missing its token",
+        "markdown-preview: this link is missing its token; use the URL the server printed",
     )
         .into_response()
 }

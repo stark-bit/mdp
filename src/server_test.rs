@@ -23,7 +23,7 @@ impl TempDir {
             .unwrap()
             .as_nanos();
         let name = format!(
-            "mkdp-test-{}-{}-{nanos}",
+            "mp-test-{}-{}-{nanos}",
             std::process::id(),
             COUNT.fetch_add(1, Ordering::Relaxed)
         );
@@ -58,31 +58,31 @@ fn test_app(config: Config) -> Arc<App> {
     App::new(config, 4321, None)
 }
 
-/// A Config with the values the tests used to set as editor vars.
+/// A Config from a JSON object of field values.
 fn config_from(vars: Value) -> Config {
     let mut config = Config::default();
-    if let Some(v) = vars.get("mkdp_open_to_the_world") {
+    if let Some(v) = vars.get("open_to_the_world") {
         config.open_to_the_world = truthy(v);
     }
-    if let Some(v) = vars.get("mkdp_port") {
+    if let Some(v) = vars.get("port") {
         config.port = parse_port(v);
     }
-    if let Some(v) = vars.get("mkdp_open_ip") {
+    if let Some(v) = vars.get("open_ip") {
         config.open_ip = Some(var_string(v.clone())).filter(|f| !f.is_empty());
     }
-    if let Some(v) = vars.get("mkdp_images_path") {
+    if let Some(v) = vars.get("images_path") {
         config.images_path =
             Some(PathBuf::from(var_string(v.clone()))).filter(|p| !p.as_os_str().is_empty());
     }
-    if let Some(v) = vars.get("mkdp_markdown_css") {
+    if let Some(v) = vars.get("markdown_css") {
         config.markdown_css =
             Some(PathBuf::from(var_string(v.clone()))).filter(|p| !p.as_os_str().is_empty());
     }
-    if let Some(v) = vars.get("mkdp_highlight_css") {
+    if let Some(v) = vars.get("highlight_css") {
         config.highlight_css =
             Some(PathBuf::from(var_string(v.clone()))).filter(|p| !p.as_os_str().is_empty());
     }
-    if let Some(v) = vars.get("mkdp_theme_css") {
+    if let Some(v) = vars.get("theme_css") {
         config.theme_css =
             Some(PathBuf::from(var_string(v.clone()))).filter(|p| !p.as_os_str().is_empty());
     }
@@ -252,8 +252,8 @@ async fn custom_css_replaces_the_embedded_css() {
     let markdown = tmp.file("my markdown.css", b"body { color: red }");
     let highlight = tmp.file("hl.css", b".hljs { color: blue }");
     let app = test_app(config_from(json!({
-        "mkdp_markdown_css": markdown.to_string_lossy(),
-        "mkdp_highlight_css": highlight.to_string_lossy(),
+        "markdown_css": markdown.to_string_lossy(),
+        "highlight_css": highlight.to_string_lossy(),
     })));
     for (path, expected) in [
         ("/_static/markdown.css", "body { color: red }"),
@@ -271,7 +271,7 @@ async fn css_falls_back_to_the_embedded_file() {
     let tmp = TempDir::new();
     // unset, and set to a file that does not exist
     let app = test_app(config_from(
-        json!({ "mkdp_highlight_css": tmp.0.join("missing.css").to_string_lossy() }),
+        json!({ "highlight_css": tmp.0.join("missing.css").to_string_lossy() }),
     ));
     for name in ["markdown.css", "highlight.css"] {
         let (status, content_type, body) = get(&app, &format!("/_static/{name}"), None).await;
@@ -310,7 +310,7 @@ async fn theme_css_is_empty_without_a_theme() {
     let tmp = TempDir::new();
     for vars in [
         json!({}),
-        json!({ "mkdp_theme_css": tmp.0.join("missing.css").to_string_lossy() }),
+        json!({ "theme_css": tmp.0.join("missing.css").to_string_lossy() }),
     ] {
         let app = test_app(config_from(vars.clone()));
         let (status, content_type, body) = get(&app, "/_theme/theme.css", None).await;
@@ -327,9 +327,7 @@ async fn theme_css_and_its_fonts_are_served() {
     tmp.file("theme/fonts/My Font.woff2", b"woff2 bytes");
     tmp.file("theme/notes.txt", b"secret");
     tmp.file("outside.woff2", b"outside");
-    let app = test_app(config_from(
-        json!({ "mkdp_theme_css": theme.to_string_lossy() }),
-    ));
+    let app = test_app(config_from(json!({ "theme_css": theme.to_string_lossy() })));
 
     let (status, content_type, body) = get(&app, "/_theme/theme.css", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -383,7 +381,7 @@ async fn local_image_uses_the_images_path() {
     tmp.file("assets/a.png", b"from images path");
     let app = serve(
         config_from(json!({
-            "mkdp_images_path": tmp.0.join("assets").to_string_lossy(),
+            "images_path": tmp.0.join("assets").to_string_lossy(),
         })),
         Some(&tmp.0),
     )
@@ -423,11 +421,11 @@ async fn local_image_decodes_the_path() {
 async fn local_image_rooted_path_is_found_in_an_ancestor() {
     let tmp = TempDir::new();
     tmp.file("project/docs/sub/a.md", b"# a");
-    tmp.file("project/images/mkdp-test-logo.svg", b"<svg/>");
+    tmp.file("project/images/mp-test-logo.svg", b"<svg/>");
     let app = serve(Config::default(), Some(&tmp.0)).await;
     let (status, content_type, body) = get(
         &app,
-        "/_assets//images/mkdp-test-logo.svg",
+        "/_assets//images/mp-test-logo.svg",
         Some("http://localhost:4321/files/project/docs/sub/a.md"),
     )
     .await;
@@ -628,11 +626,7 @@ async fn open_to_the_world_needs_the_token() {
     let tmp = TempDir::new();
     tmp.file("docs/a.md", b"# a");
     tmp.file("docs/a.png", b"png bytes");
-    let app = serve(
-        config_from(json!({ "mkdp_open_to_the_world": 1 })),
-        Some(&tmp.0),
-    )
-    .await;
+    let app = serve(config_from(json!({ "open_to_the_world": 1 })), Some(&tmp.0)).await;
     let token = app.token.clone();
     assert_eq!(token.len(), 32);
     assert_ne!(token, App::new(Config::default(), 1, None).token);
@@ -669,7 +663,7 @@ async fn open_to_the_world_needs_the_token() {
         .unwrap()
         .to_string();
     assert!(
-        cookie.starts_with(&format!("mkdp_token_{}={token};", app.port)),
+        cookie.starts_with(&format!("mp_token_{}={token};", app.port)),
         "{cookie}"
     );
     assert!(
@@ -683,7 +677,7 @@ async fn open_to_the_world_needs_the_token() {
         .header(header::REFERER, "http://localhost/files/docs/a.md")
         .header(
             header::COOKIE,
-            format!("other=1; mkdp_token_{}={token}", app.port),
+            format!("other=1; mp_token_{}={token}", app.port),
         )
         .body(Body::empty())
         .unwrap();
@@ -698,7 +692,7 @@ async fn open_to_the_world_needs_the_token() {
     let mut req = tungstenite::client::IntoClientRequest::into_client_request(url).unwrap();
     req.headers_mut().insert(
         header::COOKIE,
-        HeaderValue::from_str(&format!("mkdp_token_{}={token}", app.port)).unwrap(),
+        HeaderValue::from_str(&format!("mp_token_{}={token}", app.port)).unwrap(),
     );
     let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
     assert_eq!(next_json(&mut ws).await.unwrap()["type"], "refresh_content");
@@ -710,8 +704,8 @@ async fn page_url_uses_the_open_ip_and_the_token() {
     let root = tmp.dir("root");
     let app = serve(
         config_from(json!({
-            "mkdp_open_ip": "192.0.2.7",
-            "mkdp_open_to_the_world": 1,
+            "open_ip": "192.0.2.7",
+            "open_to_the_world": 1,
         })),
         Some(&root),
     )

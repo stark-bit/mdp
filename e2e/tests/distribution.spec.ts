@@ -1,20 +1,8 @@
 // Release checks that need neither a browser nor a running server: the names
-// and versions spread over the workflow, the install scripts and the built
-// binary must agree, or a release publishes something users cannot install.
-import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+// and versions spread over the workflow and the built binary must agree, or a
+// release publishes something users cannot install.
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { expect, test } from "@playwright/test";
@@ -23,8 +11,6 @@ import { REPO, SERVER_BINARY } from "../lib/server";
 import { VERSION } from "../lib/release";
 
 const read = (path: string) => readFileSync(join(REPO, path), "utf8");
-// the download base install.sh itself uses, so the script and these checks agree
-const RELEASES = /url="([^"]+releases\/download)/.exec(read("app/install.sh"))![1];
 
 /** Asset base names the release workflow publishes. */
 function releasedAssets() {
@@ -53,113 +39,11 @@ test.describe("versions", () => {
 });
 
 test.describe("release assets", () => {
-  test("install.sh only downloads released assets", () => {
-    const assets = releasedAssets();
-    const downloads = [...read("app/install.sh").matchAll(/download (markdown-preview-[\w-]+)\.tar\.gz/g)].map(
-      (m) => m[1],
-    );
-    expect(downloads.length).toBeGreaterThan(0);
-    for (const name of downloads) expect(assets).toContain(name);
-  });
-
-  test("install.cmd downloads the Windows asset", () => {
-    expect(read("app/install.cmd")).toContain('$file = "markdown-preview-win.zip"');
-    expect(releasedAssets()).toContain("markdown-preview-win");
-  });
-
   test("the archives hold the binary the release workflow builds", () => {
     const workflow = read(".github/workflows/release.yml");
     expect(workflow).toContain("cp target/${{ matrix.target }}/release/markdown-preview ${{ matrix.name }}");
     expect(workflow).toContain("tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}");
     expect(workflow).toContain("markdown-preview.exe ${{ matrix.name }}.exe");
-  });
-});
-
-test.describe("install.sh", () => {
-  test.skip(process.platform === "win32", "install.sh is for unix");
-
-  /** Runs a copy of install.sh as if on `uname -sm` = `system`, with curl faked. */
-  function install(system: string, args: string[] = [], { failDownload = false } = {}) {
-    const root = mkdtempSync(join(tmpdir(), "mkdp-install-"));
-    try {
-      cpSync(join(REPO, "app/install.sh"), join(root, "app/install.sh"));
-      cpSync(join(REPO, "Cargo.toml"), join(root, "Cargo.toml"));
-      const bin = join(root, "fakebin");
-      mkdirSync(bin);
-      // an archive holding one executable named like the requested asset
-      const log = join(root, "requests");
-      writeFileSync(
-        join(bin, "uname"),
-        `#!/bin/sh\n[ "$1" = "-sm" ] && echo '${system}' && exit 0\nexec /usr/bin/uname "$@"\n`,
-      );
-      writeFileSync(
-        join(bin, "curl"),
-        [
-          "#!/bin/sh",
-          'for url; do :; done',
-          `echo "$url" >> '${log}'`,
-          failDownload ? "echo 'curl: (22) 404' >&2; exit 22" : "",
-          'name=$(basename "$url" .tar.gz)',
-          'tmp=$(mktemp -d); printf "#!/bin/sh\\necho fake\\n" > "$tmp/$name"',
-          'tar -czf - -C "$tmp" "$name"',
-        ].join("\n"),
-      );
-      chmodSync(join(bin, "uname"), 0o755);
-      chmodSync(join(bin, "curl"), 0o755);
-      const result = spawnSync("bash", [join(root, "app/install.sh"), ...args], {
-        encoding: "utf8",
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
-      });
-      const requests = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [];
-      const binDir = join(root, "app/bin");
-      const installed = existsSync(binDir)
-        ? execFileSync("ls", [binDir], { encoding: "utf8" }).split("\n").filter((f) => f && !f.endsWith(".gz"))
-        : [];
-      const executable = installed.every((f) => (statSync(join(binDir, f)).mode & 0o111) !== 0);
-      return { status: result.status, output: result.stdout + result.stderr, requests, installed, executable };
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  }
-
-  const supported: [string, string][] = [
-    ["Linux x86_64", "markdown-preview-linux"],
-    ["Darwin x86_64", "markdown-preview-macos"],
-    ["Darwin arm64", "markdown-preview-macos-arm64"],
-    ["Linux aarch64", "markdown-preview-linux-arm64"],
-    ["Linux arm64", "markdown-preview-linux-arm64"],
-    ["FreeBSD amd64", "markdown-preview-freebsd"],
-  ];
-  for (const [system, asset] of supported) {
-    test(`${system} installs ${asset}`, () => {
-      const result = install(system, ["v1.2.3"]);
-      expect(result.requests).toEqual([`${RELEASES}/v1.2.3/${asset}.tar.gz`]);
-      expect(result.installed).toEqual([asset]);
-      expect(result.executable).toBe(true);
-    });
-  }
-
-  test("without a tag it installs the built version", () => {
-    const result = install("Linux x86_64");
-    expect(result.requests).toEqual([`${RELEASES}/v${VERSION}/markdown-preview-linux.tar.gz`]);
-  });
-
-  // unsupported systems must not get a binary for another architecture
-  for (const system of ["Linux i686", "Linux armv7l", "FreeBSD arm64", "SunOS i86pc"]) {
-    test(`${system} downloads nothing`, () => {
-      const result = install(system, ["v1.2.3"]);
-      expect(result.requests).toEqual([]);
-      expect(result.installed).toEqual([]);
-      expect(result.output).toContain("No pre-built binary available");
-      expect(result.status).not.toBe(0);
-    });
-  }
-
-  test("a failed download leaves no binary behind", () => {
-    const result = install("Linux x86_64", ["v1.2.3"], { failDownload: true });
-    expect(result.requests).toHaveLength(1);
-    expect(result.installed).toEqual([]);
-    expect(result.output).toContain("Command failed (exit code 22)");
   });
 });
 

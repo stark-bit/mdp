@@ -9,7 +9,7 @@ fn default_log_file_is_per_user() {
     let uid = unsafe { libc::getuid() };
     assert_eq!(
         path.file_name().unwrap().to_string_lossy(),
-        format!("mkdp-nvim-{uid}.log")
+        format!("markdown-preview-{uid}.log")
     );
 }
 
@@ -23,12 +23,12 @@ fn timestamp_is_utc_date_and_time() {
 #[test]
 fn suffix_goes_before_the_extension() {
     assert_eq!(
-        with_suffix(Path::new("/tmp/mkdp-nvim-501.log"), "1"),
-        PathBuf::from("/tmp/mkdp-nvim-501.1.log")
+        with_suffix(Path::new("/tmp/markdown-preview-501.log"), "1"),
+        PathBuf::from("/tmp/markdown-preview-501.1.log")
     );
     assert_eq!(
-        with_suffix(Path::new("/tmp/mkdp"), "1"),
-        PathBuf::from("/tmp/mkdp.1")
+        with_suffix(Path::new("/tmp/mp"), "1"),
+        PathBuf::from("/tmp/mp.1")
     );
 }
 
@@ -52,12 +52,12 @@ fn debug_log_is_per_session() {
     );
 }
 
-/// A fresh directory with `mkdp.log` and `mkdp.1.log` paths in it.
+/// A fresh directory with `mp.log` and `mp.1.log` paths in it.
 fn log_pair(name: &str) -> (PathBuf, PathBuf) {
-    let dir = std::env::temp_dir().join(format!("mkdp-logger-{}-{name}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("mp-logger-{}-{name}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    (dir.join("mkdp.log"), dir.join("mkdp.1.log"))
+    (dir.join("mp.log"), dir.join("mp.1.log"))
 }
 
 /// Writes `size` bytes to `path`, modified `age` seconds ago.

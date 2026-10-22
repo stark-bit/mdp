@@ -1,4 +1,4 @@
-@layer mkdp-theme {
+@layer mp-theme {
   :root {
     color-scheme: light;
     --radius: 0.625rem;
@@ -231,7 +231,7 @@ body {
   --alert-color: #f85149;
 }
 
-/* g:mkdp_preview_options.front_matter = "panel" */
+/* front_matter = "panel" option renders the front matter panel */
 .front-matter {
   margin-bottom: 16px;
   padding: 0.5rem 1rem;
