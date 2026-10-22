@@ -9,7 +9,7 @@ use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode, Uri};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use include_dir::{include_dir, Dir};
@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Notify};
 
-use crate::config::{truthy, var_string, Config};
+use crate::config::Config;
 use crate::editor::{Editor, Incoming};
 use crate::{error, info, opener};
 
@@ -38,11 +38,10 @@ const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-/// What a preview page shows: a buffer, which the editor keeps up to date, or
-/// a markdown file under the root that no buffer has open, read from disk.
+/// What a preview page shows: a markdown file under the root, read from
+/// disk.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Target {
-    Buffer(i64),
     File(PathBuf),
 }
 
@@ -213,13 +212,13 @@ impl App {
                 }
                 // nvim sends the params array, vim the dict itself
                 let opts = args.get(0).unwrap_or(args);
-                let Some(bufnr) = opts.get("bufnr").and_then(Value::as_i64) else {
+                let Some(file) = opts.get("path").and_then(Value::as_str).map(PathBuf::from) else {
                     continue;
                 };
                 match method.as_str() {
-                    "refresh_content" => self.refresh_page(bufnr).await,
-                    "close_page" => self.close_page(bufnr).await,
-                    "open_browser" => self.open_browser(bufnr).await,
+                    "refresh_content" => self.refresh_file(&file).await,
+                    "close_page" => self.close_page(&file).await,
+                    "open_browser" => self.open_file(&file).await,
                     _ => {}
                 }
             }
@@ -234,8 +233,7 @@ impl App {
         info!(LOG, "client connect: {id} {target:?}");
         let (tx, mut rx) = mpsc::unbounded_channel();
         let data = match &target {
-            Target::Buffer(bufnr) => self.preview_data(*bufnr).await,
-            Target::File(path) => self.file_preview_data(path).await,
+            Target::File(path) => self.file_data(path).await,
         };
         if let Some(data) = data {
             let _ = tx.send(message(json!({ "type": "refresh_content", "data": data })));
@@ -273,47 +271,35 @@ impl App {
         }
     }
 
-    async fn preview_data(&self, bufnr: i64) -> Option<Value> {
-        match self
-            .editor
-            .call("mkdp#util#preview_data", vec![bufnr.into()])
-            .await
-        {
-            Ok(data) if data.is_object() => Some(data),
-            Ok(_) => None,
+    /// Reads a markdown file from disk in the shape the page consumes.
+    async fn file_data(&self, path: &Path) -> Option<Value> {
+        let text = match tokio::fs::read_to_string(path).await {
+            Ok(text) => text,
             Err(err) => {
-                error!(LOG, "failed to get content of buffer {bufnr}: {err}");
-                None
+                error!(LOG, "failed to read {}: {err}", path.display());
+                return None;
             }
-        }
+        };
+        let content: Vec<Value> = text.lines().map(Value::from).collect();
+        Some(json!({
+            "options": self.config.preview_options,
+            "isActive": 0,
+            "winline": 0,
+            "winheight": 0,
+            "cursor": [0, 0, 0, 0],
+            "pageTitle": self.config.page_title,
+            "theme": self.config.theme,
+            "name": path.to_string_lossy(),
+            "content": content,
+        }))
     }
 
-    async fn file_preview_data(&self, path: &Path) -> Option<Value> {
-        let path = path.to_string_lossy();
-        match self
-            .editor
-            .call("mkdp#util#file_preview_data", vec![path.as_ref().into()])
-            .await
-        {
-            Ok(data) if data.is_object() => Some(data),
-            Ok(_) => None,
-            Err(err) => {
-                error!(LOG, "failed to read {path}: {err}");
-                None
-            }
-        }
-    }
-
-    /// Sends `msg` to the pages showing `bufnr`, or to all pages.
-    fn broadcast(&self, bufnr: Option<i64>, msg: Value) -> usize {
+    /// Sends `msg` to the pages showing `target`, or to all pages.
+    fn broadcast(&self, target: Option<&Target>, msg: Value) -> usize {
         let msg = message(msg);
         let clients = self.clients.lock().unwrap();
-        let targets: Vec<&Client> = match bufnr {
-            Some(bufnr) => clients
-                .get(&Target::Buffer(bufnr))
-                .into_iter()
-                .flatten()
-                .collect(),
+        let targets: Vec<&Client> = match target {
+            Some(target) => clients.get(target).into_iter().flatten().collect(),
             None => clients.values().flatten().collect(),
         };
         targets
@@ -322,31 +308,33 @@ impl App {
             .count()
     }
 
-    fn has_clients(&self, bufnr: i64) -> bool {
+    fn has_clients(&self, target: &Target) -> bool {
         self.clients
             .lock()
             .unwrap()
-            .get(&Target::Buffer(bufnr))
+            .get(target)
             .is_some_and(|c| !c.is_empty())
     }
 
-    async fn refresh_page(&self, bufnr: i64) {
-        if !self.has_clients(bufnr) {
+    async fn refresh_file(&self, path: &Path) {
+        let target = Target::File(path.to_path_buf());
+        if !self.has_clients(&target) {
             return;
         }
-        info!(LOG, "refresh page: {bufnr}");
-        if let Some(data) = self.preview_data(bufnr).await {
+        info!(LOG, "refresh page: {}", path.display());
+        if let Some(data) = self.file_data(path).await {
             self.broadcast(
-                Some(bufnr),
+                Some(&target),
                 json!({ "type": "refresh_content", "data": data }),
             );
         }
     }
 
-    async fn close_page(&self, bufnr: i64) {
-        info!(LOG, "close page: {bufnr}");
-        self.broadcast(Some(bufnr), json!({ "type": "close_page" }));
-        self.clients.lock().unwrap().remove(&Target::Buffer(bufnr));
+    async fn close_page(&self, path: &Path) {
+        info!(LOG, "close page: {}", path.display());
+        let target = Target::File(path.to_path_buf());
+        self.broadcast(Some(&target), json!({ "type": "close_page" }));
+        self.clients.lock().unwrap().remove(&target);
     }
 
     async fn close_all_pages(&self) {
@@ -372,18 +360,9 @@ impl App {
         }
     }
 
-    async fn open_browser(&self, bufnr: i64) {
+    async fn open_file(&self, path: &Path) {
         let editor = &self.editor;
-        let path = self.page_path(bufnr).await;
-        if self.config.combine_preview
-            && self.broadcast(
-                None,
-                json!({ "type": "change_bufnr", "bufnr": bufnr, "path": path }),
-            ) > 0
-        {
-            info!(LOG, "combine preview page: {bufnr}");
-            return;
-        }
+        let path = self.files_path(path);
         let open_ip = self.config.open_ip.clone().unwrap_or_default();
         let host = if !open_ip.is_empty() {
             open_ip
@@ -416,41 +395,30 @@ impl App {
 }
 
 impl App {
-    /// `[bufnr, full path]` of the editor's loaded buffers with a file.
-    async fn buffers(&self) -> Vec<(i64, String)> {
-        let Ok(Value::Array(buffers)) = self.editor.call("mkdp#util#buffers", vec![]).await else {
-            return vec![];
-        };
-        buffers
-            .iter()
-            .filter_map(|b| Some((b.get(0)?.as_i64()?, b.get(1)?.as_str()?.to_string())))
-            .collect()
-    }
-
-    /// The url path of the page for `bufnr`: /files/<path> when its file is
-    /// under the root, /page/<bufnr> for other files and unnamed buffers.
-    async fn page_path(&self, bufnr: i64) -> String {
-        let relative = async {
-            let root = self.root.as_ref()?;
-            let (_, name) = self
-                .buffers()
-                .await
-                .into_iter()
-                .find(|(n, _)| *n == bufnr)?;
-            let path = Path::new(&name).canonicalize().ok()?;
-            let relative = path.strip_prefix(root).ok()?;
-            let segments: Vec<String> = relative
-                .components()
-                .map(|c| {
-                    utf8_percent_encode(&c.as_os_str().to_string_lossy(), PATH_SEGMENT).to_string()
-                })
-                .collect();
-            (!segments.is_empty()).then(|| segments.join("/"))
-        };
-        match relative.await {
-            Some(relative) => format!("/files/{relative}"),
-            None => format!("/page/{bufnr}"),
+    /// The url path of the page for `path`: /files/<path relative to the
+    /// root>, or the file's canonical path when it is not under the root.
+    fn files_path(&self, path: &Path) -> String {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let relative = self
+            .root
+            .as_ref()
+            .and_then(|root| path.strip_prefix(root).ok());
+        match relative {
+            Some(relative) if !relative.as_os_str().is_empty() => {
+                let segments: Vec<String> = relative
+                    .components()
+                    .map(|c| {
+                        utf8_percent_encode(&c.as_os_str().to_string_lossy(), PATH_SEGMENT)
+                            .to_string()
+                    })
+                    .collect();
+                if !segments.is_empty() {
+                    return format!("/files/{}", segments.join("/"));
+                }
+            }
+            _ => {}
         }
+        path.to_string_lossy().into_owned()
     }
 
     /// The file a /files/ url path names: under the root, after following
@@ -474,20 +442,8 @@ impl App {
 
     /// What the page at url path `page` shows.
     async fn target(&self, page: &str) -> Option<Target> {
-        if let Some(bufnr) = page.strip_prefix("/page/") {
-            return bufnr.parse().ok().map(Target::Buffer);
-        }
         let path = self.resolve_file(page.strip_prefix("/files/")?)?;
-        let buffer = self.buffers().await.into_iter().find(|(_, name)| {
-            Path::new(name)
-                .canonicalize()
-                .is_ok_and(|name| name == path)
-        });
-        match buffer {
-            Some((bufnr, _)) => Some(Target::Buffer(bufnr)),
-            None if is_markdown(&path) => Some(Target::File(path)),
-            None => None,
-        }
+        is_markdown(&path).then(|| Target::File(path))
     }
 }
 
@@ -521,22 +477,8 @@ async fn websocket(
 
 async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
     let path = req.uri().path();
-
-    // old preview pages rewrote their url to /<bufnr>
-    if let Some(bufnr) = path
-        .strip_prefix('/')
-        .filter(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
-    {
-        let query = req
-            .uri()
-            .query()
-            .map(|q| format!("?{q}"))
-            .unwrap_or_default();
-        return Redirect::temporary(&format!("/page/{bufnr}{query}")).into_response();
-    }
     let files = path.starts_with("/files/");
-    let page = path == "/"
-        || (path.starts_with("/page/") && path[6..].starts_with(|c: char| c.is_ascii_digit()));
+    let page = path == "/";
     let private = page || files || path.starts_with("/_assets/") || path.starts_with("/_theme/");
     if private && !app.authorized(req.uri(), req.headers()) {
         return unauthorized();
@@ -604,13 +546,7 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
 
 async fn local_image(app: &App, target: Option<Target>, image: &str) -> Option<Response> {
     info!(LOG, "image route: {image}");
-    let editor = &app.editor;
     let target = target?;
-    if let Target::Buffer(bufnr) = target {
-        if !truthy(&editor.call("bufexists", vec![bufnr.into()]).await.ok()?) {
-            return None;
-        }
-    }
     let mut file_dir = app
         .config
         .images_path
@@ -619,12 +555,6 @@ async fn local_image(app: &App, target: Option<Target>, image: &str) -> Option<R
         .unwrap_or_default();
     if file_dir.is_empty() {
         file_dir = match target {
-            Target::Buffer(bufnr) => var_string(
-                editor
-                    .call("expand", vec![format!("#{bufnr}:p:h").into()])
-                    .await
-                    .ok()?,
-            ),
             Target::File(path) => path.parent()?.to_string_lossy().into_owned(),
         };
     }

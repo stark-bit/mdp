@@ -3,7 +3,7 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -58,9 +58,10 @@ fn temp_path(name: &str) -> PathBuf {
 }
 
 impl Server {
-    /// Starts the server like mkdp#rpc#start_server does. The browser is
-    /// neutralized with a browserfunc the test answers instead.
-    fn start(mode: Mode) -> Server {
+    /// Starts the server like mkdp#rpc#start_server does, with `dir` as its
+    /// working directory. The browser is neutralized with a browserfunc the
+    /// test answers instead.
+    fn start(mode: Mode, dir: &Path) -> Server {
         let log = temp_path("mkdp.log");
         let config = temp_path("config.toml");
         std::fs::write(&config, "browserfunc = \"MkdpTestOpen\"\n").unwrap();
@@ -70,6 +71,7 @@ impl Server {
             .env_remove("NVIM_MKDP_LOG_LEVEL")
             .arg("--config")
             .arg(&config)
+            .current_dir(dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -136,16 +138,17 @@ impl Server {
         }
     }
 
-    fn notify(&mut self, method: &str, bufnr: i64) {
+    fn notify(&mut self, method: &str, path: &Path) {
+        let opts = json!({ "path": path.to_string_lossy() });
         match self.mode {
-            // rpcnotify(chan, method, {'bufnr': n})
+            // rpcnotify(chan, method, {'path': p})
             Mode::Nvim => self.send_msgpack(rmpv::Value::Array(vec![
                 2.into(),
                 method.into(),
-                rmpv::Value::Array(vec![rmpv::Value::Map(vec![("bufnr".into(), bufnr.into())])]),
+                rmpv::Value::Array(vec![to_msgpack(&opts)]),
             ])),
             // mkdp#rpc#notify
-            Mode::Vim => self.send_json(json!([0, [method, { "bufnr": bufnr }]])),
+            Mode::Vim => self.send_json(json!([0, [method, opts]])),
         }
     }
 
@@ -309,7 +312,8 @@ fn to_msgpack(value: &Value) -> rmpv::Value {
 }
 
 /// An editor with `g:mkdp_browserfunc` set and nothing else configured.
-fn editor(mode: Mode) -> impl Fn(&Request) -> Result<Value, String> {
+fn editor(mode: Mode, dir: &Path) -> impl Fn(&Request) -> Result<Value, String> {
+    let cwd = dir.to_path_buf();
     move |req| match req.method.as_str() {
         "nvim_get_var" => match req.args[0].as_str().unwrap() {
             "mkdp_browserfunc" => Ok(json!("MkdpTestOpen")),
@@ -321,7 +325,10 @@ fn editor(mode: Mode) -> impl Fn(&Request) -> Result<Value, String> {
             },
         },
         "nvim_set_var" => Ok(Value::Null),
-        "nvim_call_function" => Ok(Value::Null),
+        "nvim_call_function" => match req.args[0].as_str().unwrap() {
+            "getcwd" => Ok(json!(cwd.to_string_lossy())),
+            _ => Ok(Value::Null),
+        },
         method => panic!("unexpected request {method}"),
     }
 }
@@ -344,8 +351,13 @@ fn http_get(port: u16, path: &str) -> String {
 }
 
 fn stdio_protocol(mode: Mode) {
-    let mut server = Server::start(mode);
-    let editor = editor(mode);
+    // the child's working directory is the served root
+    let dir = temp_path("root");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.canonicalize().unwrap().join("a.md");
+    std::fs::write(&file, b"# a").unwrap();
+    let mut server = Server::start(mode, &dir);
+    let editor = editor(mode, &dir);
     let mut seen = Vec::new();
 
     let open = server.serve_until(&mut seen, &editor, |r| is_call(r, "mkdp#util#open_browser"));
@@ -357,12 +369,12 @@ fn stdio_protocol(mode: Mode) {
     server.reply(open.id, Ok(Value::Null));
 
     // what :MarkdownPreview does through mkdp#util#open_browser
-    server.notify("open_browser", 1);
+    server.notify("open_browser", &file);
     let browse = server.serve_until(&mut seen, &editor, |r| is_call(r, "MkdpTestOpen"));
     let url = browse.args[1][0].as_str().unwrap().to_string();
     let port: u16 = url
         .strip_prefix("http://localhost:")
-        .and_then(|rest| rest.strip_suffix("/page/1"))
+        .and_then(|rest| rest.strip_suffix("/files/a.md"))
         .unwrap_or_else(|| panic!("unexpected preview url {url}"))
         .parse()
         .unwrap();
@@ -372,7 +384,7 @@ fn stdio_protocol(mode: Mode) {
     assert_eq!(hook.args[1], json!(["on_start", url]));
     server.reply(hook.id, Ok(Value::Null));
 
-    let response = http_get(port, "/page/1");
+    let response = http_get(port, "/files/a.md");
     let (head, body) = response.split_once("\r\n\r\n").unwrap();
     assert!(head.starts_with("HTTP/1.1 200"), "{head}");
     assert!(
@@ -409,7 +421,9 @@ fn vim_stdio_protocol() {
 
 #[test]
 fn exits_when_nvim_closes_stdin() {
-    let mut server = Server::start(Mode::Nvim);
+    let dir = temp_path("root");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut server = Server::start(Mode::Nvim, &dir);
     // the server is up and waiting on the editor
     match server.next() {
         Message::Request(req) => assert_eq!(req.method, "nvim_call_function"),
@@ -421,7 +435,9 @@ fn exits_when_nvim_closes_stdin() {
 
 #[test]
 fn exits_when_vim_closes_stdin() {
-    let mut server = Server::start(Mode::Vim);
+    let dir = temp_path("root");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut server = Server::start(Mode::Vim, &dir);
     match server.next() {
         Message::Request(req) => assert_eq!(req.method, "nvim_call_function"),
         Message::Response(..) => panic!("expected a request"),

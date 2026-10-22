@@ -55,45 +55,15 @@ impl Drop for TempDir {
     }
 }
 
-/// An nvim with the buffers in `buffers` (bufnr, directory of its file).
-/// `mkdp#util#preview_data` answers `{"bufnr": n, "seq": <how many times it
-/// was called>}`.
-fn fake(buffers: Vec<(i64, PathBuf)>) -> FakeEditor {
-    let seq = AtomicUsize::new(0);
-    FakeEditor::new(move |call| {
-        let args = &call.args;
-        match call.method.as_str() {
-            "nvim_call_function" => {
-                let func_args = args[1].as_array().unwrap();
-                let bufnr = |arg: &Value| {
-                    buffers
-                        .iter()
-                        .find(|(n, _)| Some(*n) == arg.as_i64())
-                        .cloned()
-                };
-                match args[0].as_str().unwrap() {
-                    "bufexists" => Ok(json!(i32::from(bufnr(&func_args[0]).is_some()))),
-                    "expand" => {
-                        let expr = func_args[0].as_str().unwrap();
-                        let found = buffers.iter().find(|(n, _)| expr == format!("#{n}:p:h"));
-                        Ok(found
-                            .map(|(_, dir)| json!(dir.to_string_lossy()))
-                            .unwrap_or_else(|| json!("")))
-                    }
-                    "mkdp#util#preview_data" => {
-                        let n = seq.fetch_add(1, Ordering::Relaxed) + 1;
-                        Ok(json!({ "bufnr": func_args[0], "seq": n }))
-                    }
-                    func => Ok(json!(format!("called {func}"))),
-                }
-            }
-            _ => Ok(Value::Null),
-        }
-    })
+/// An editor that records the functions the server calls (browser opening,
+/// url echo, hooks) and answers everything with null. Preview content comes
+/// from disk now, so the tests need no editor behavior.
+fn fake() -> FakeEditor {
+    FakeEditor::new(|_| Ok(Value::Null))
 }
 
-fn test_app(config: Config, editor: &FakeEditor) -> Arc<App> {
-    App::new(config, editor.editor.clone(), 4321, None)
+fn test_app(config: Config) -> Arc<App> {
+    App::new(config, fake().editor.clone(), 4321, None)
 }
 
 /// A Config with the values the tests used to set as editor vars.
@@ -113,9 +83,6 @@ fn config_from(vars: Value) -> Config {
     }
     if let Some(v) = vars.get("mkdp_echo_preview_url") {
         config.echo_preview_url = truthy(v);
-    }
-    if let Some(v) = vars.get("mkdp_combine_preview") {
-        config.combine_preview = truthy(v);
     }
     if let Some(v) = vars.get("mkdp_images_path") {
         config.images_path =
@@ -271,22 +238,12 @@ async fn bind_is_local_unless_open_to_the_world() {
 }
 
 #[tokio::test]
-async fn bare_bufnr_redirects_to_its_page() {
-    let editor = fake(vec![]);
-    let res = route(
-        State(test_app(Config::default(), &editor)),
-        Request::builder().uri("/12").body(Body::empty()).unwrap(),
-    )
-    .await;
-    assert_eq!(res.status(), StatusCode::TEMPORARY_REDIRECT);
-    assert_eq!(res.headers()[header::LOCATION], "/page/12");
-}
-
-#[tokio::test]
 async fn pages_serve_the_index() {
-    let app = test_app(Config::default(), &fake(vec![]));
+    let tmp = TempDir::new();
+    tmp.file("docs/a.md", b"# a");
+    let app = serve(Config::default(), Some(&tmp.0)).await.0;
     let index = embedded_file("index.html");
-    for path in ["/", "/page/3", "/page/3?x=1"] {
+    for path in ["/", "/files/docs/a.md", "/files/docs/a.md?x=1"] {
         let (status, content_type, body) = get(&app, path, None).await;
         assert_eq!(status, StatusCode::OK, "{path}");
         assert!(
@@ -295,14 +252,14 @@ async fn pages_serve_the_index() {
         );
         assert_eq!(body, index, "{path}");
     }
-    let (status, _, body) = get(&app, "/page/abc", None).await;
+    let (status, _, body) = get(&app, "/files/docs/missing.md", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_ne!(body, index);
 }
 
 #[tokio::test]
 async fn unknown_paths_are_404() {
-    let app = test_app(Config::default(), &fake(vec![]));
+    let app = test_app(Config::default());
     let (status, content_type, body) = get(&app, "/no/such/file.js", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(content_type.starts_with("text/html"), "{content_type}");
@@ -311,7 +268,7 @@ async fn unknown_paths_are_404() {
 
 #[tokio::test]
 async fn embedded_assets_are_served() {
-    let app = test_app(Config::default(), &fake(vec![]));
+    let app = test_app(Config::default());
     let (status, content_type, body) = get(&app, "/_static/favicon.ico", None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(content_type.starts_with("image/"), "{content_type}");
@@ -323,14 +280,10 @@ async fn custom_css_replaces_the_embedded_css() {
     let tmp = TempDir::new();
     let markdown = tmp.file("my markdown.css", b"body { color: red }");
     let highlight = tmp.file("hl.css", b".hljs { color: blue }");
-    let editor = fake(vec![]);
-    let app = test_app(
-        config_from(json!({
-            "mkdp_markdown_css": markdown.to_string_lossy(),
-            "mkdp_highlight_css": highlight.to_string_lossy(),
-        })),
-        &editor,
-    );
+    let app = test_app(config_from(json!({
+        "mkdp_markdown_css": markdown.to_string_lossy(),
+        "mkdp_highlight_css": highlight.to_string_lossy(),
+    })));
     for (path, expected) in [
         ("/_static/markdown.css", "body { color: red }"),
         ("/_static/highlight.css", ".hljs { color: blue }"),
@@ -346,11 +299,9 @@ async fn custom_css_replaces_the_embedded_css() {
 async fn css_falls_back_to_the_embedded_file() {
     let tmp = TempDir::new();
     // unset, and set to a file that does not exist
-    let editor = fake(vec![]);
-    let app = test_app(
-        config_from(json!({ "mkdp_highlight_css": tmp.0.join("missing.css").to_string_lossy() })),
-        &editor,
-    );
+    let app = test_app(config_from(
+        json!({ "mkdp_highlight_css": tmp.0.join("missing.css").to_string_lossy() }),
+    ));
     for name in ["markdown.css", "highlight.css"] {
         let (status, content_type, body) = get(&app, &format!("/_static/{name}"), None).await;
         assert_eq!(status, StatusCode::OK, "{name}");
@@ -390,7 +341,7 @@ async fn theme_css_is_empty_without_a_theme() {
         json!({}),
         json!({ "mkdp_theme_css": tmp.0.join("missing.css").to_string_lossy() }),
     ] {
-        let app = test_app(config_from(vars.clone()), &fake(vec![]));
+        let app = test_app(config_from(vars.clone()));
         let (status, content_type, body) = get(&app, "/_theme/theme.css", None).await;
         assert_eq!(status, StatusCode::OK, "{vars}");
         assert_eq!(content_type, "text/css", "{vars}");
@@ -405,10 +356,9 @@ async fn theme_css_and_its_fonts_are_served() {
     tmp.file("theme/fonts/My Font.woff2", b"woff2 bytes");
     tmp.file("theme/notes.txt", b"secret");
     tmp.file("outside.woff2", b"outside");
-    let app = test_app(
-        config_from(json!({ "mkdp_theme_css": theme.to_string_lossy() })),
-        &fake(vec![]),
-    );
+    let app = test_app(config_from(
+        json!({ "mkdp_theme_css": theme.to_string_lossy() }),
+    ));
 
     let (status, content_type, body) = get(&app, "/_theme/theme.css", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -435,44 +385,43 @@ async fn theme_css_and_its_fonts_are_served() {
     }
 }
 
-const PAGE_3: Option<&str> = Some("http://localhost:4321/page/3");
-
 #[tokio::test]
-async fn local_image_is_relative_to_the_buffer() {
+async fn local_image_is_relative_to_the_file() {
     let tmp = TempDir::new();
-    let docs = tmp.dir("docs");
+    tmp.file("docs/a.md", b"# a");
     tmp.file("docs/img/a.png", b"png bytes");
-    let editor = fake(vec![(3, docs)]);
-    let app = test_app(Config::default(), &editor);
+    let app = serve(Config::default(), Some(&tmp.0)).await.0;
 
-    let (status, content_type, body) = get(&app, "/_assets/img/a.png", PAGE_3).await;
+    let referer = Some("http://localhost:4321/files/docs/a.md");
+    let (status, content_type, body) = get(&app, "/_assets/img/a.png", referer).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type, "image/png");
     assert_eq!(body, b"png bytes");
-    assert_eq!(editor.function_calls("bufexists"), vec![vec![json!(3)]]);
-    assert_eq!(editor.function_calls("expand"), vec![vec![json!("#3:p:h")]]);
 
-    // the page's query string and hash are not part of the bufnr
-    let referer = Some("http://localhost:4321/page/3?theme=dark#top");
+    // the page's query string and hash are not part of the file path
+    let referer = Some("http://localhost:4321/files/docs/a.md?theme=dark#top");
     let (status, _, body) = get(&app, "/_assets/img/a.png", referer).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, b"png bytes");
 }
 
 #[tokio::test]
-async fn local_image_uses_mkdp_images_path() {
+async fn local_image_uses_the_images_path() {
     let tmp = TempDir::new();
-    let docs = tmp.dir("docs");
-    tmp.file("docs/a.png", b"next to the buffer");
-    let assets = tmp.dir("assets");
+    tmp.file("docs/a.md", b"# a");
     tmp.file("assets/a.png", b"from images path");
+    let app = serve(
+        config_from(json!({
+            "mkdp_images_path": tmp.0.join("assets").to_string_lossy(),
+        })),
+        Some(&tmp.0),
+    )
+    .await
+    .0;
     let (status, _, body) = get(
-        &test_app(
-            config_from(json!({ "mkdp_images_path": assets.to_string_lossy() })),
-            &fake(vec![(3, docs)]),
-        ),
+        &app,
         "/_assets/a.png",
-        PAGE_3,
+        Some("http://localhost:4321/files/docs/a.md"),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -482,9 +431,9 @@ async fn local_image_uses_mkdp_images_path() {
 #[tokio::test]
 async fn local_image_decodes_the_path() {
     let tmp = TempDir::new();
-    let docs = tmp.dir("docs");
+    tmp.file("docs/a.md", b"# a");
     tmp.file("docs/my pic.jpg", b"jpeg bytes");
-    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
+    let app = serve(Config::default(), Some(&tmp.0)).await.0;
     for path in [
         "/_assets/my%20pic.jpg",
         // encoded by the page and again by the browser
@@ -492,7 +441,8 @@ async fn local_image_decodes_the_path() {
         // `my\ pic.jpg`, a shell-escaped space
         "/_assets/my%5C%20pic.jpg",
     ] {
-        let (status, content_type, body) = get(&app, path, PAGE_3).await;
+        let (status, content_type, body) =
+            get(&app, path, Some("http://localhost:4321/files/docs/a.md")).await;
         assert_eq!(status, StatusCode::OK, "{path}");
         assert_eq!(content_type, "image/jpeg", "{path}");
         assert_eq!(body, b"jpeg bytes", "{path}");
@@ -502,40 +452,55 @@ async fn local_image_decodes_the_path() {
 #[tokio::test]
 async fn local_image_rooted_path_is_found_in_an_ancestor() {
     let tmp = TempDir::new();
-    let sub = tmp.dir("project/docs/sub");
+    tmp.file("project/docs/sub/a.md", b"# a");
     tmp.file("project/images/mkdp-test-logo.svg", b"<svg/>");
-    let app = test_app(Config::default(), &fake(vec![(3, sub)]));
-    let (status, content_type, body) =
-        get(&app, "/_assets//images/mkdp-test-logo.svg", PAGE_3).await;
+    let app = serve(Config::default(), Some(&tmp.0)).await.0;
+    let (status, content_type, body) = get(
+        &app,
+        "/_assets//images/mkdp-test-logo.svg",
+        Some("http://localhost:4321/files/project/docs/sub/a.md"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type, "image/svg+xml");
     assert_eq!(body, b"<svg/>");
 }
 
 #[tokio::test]
-async fn local_image_absolute_path_inside_the_buffer_dir() {
+async fn local_image_absolute_path_inside_the_file_dir() {
     let tmp = TempDir::new();
-    let docs = tmp.dir("docs");
+    tmp.file("docs/a.md", b"# a");
     let image = tmp.file("docs/a.gif", b"gif bytes");
-    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
+    let app = serve(Config::default(), Some(&tmp.0)).await.0;
     let path = format!("/_assets/{}", image.to_string_lossy());
-    let (status, content_type, body) = get(&app, &path, PAGE_3).await;
+    let (status, content_type, body) =
+        get(&app, &path, Some("http://localhost:4321/files/docs/a.md")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type, "image/gif");
     assert_eq!(body, b"gif bytes");
 }
 
 #[tokio::test]
-async fn local_image_needs_an_existing_buffer() {
+async fn local_image_needs_a_resolvable_page() {
     let tmp = TempDir::new();
-    let docs = tmp.dir("docs");
     tmp.file("docs/a.png", b"png bytes");
-    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
+    tmp.file("docs/a.md", b"# a");
+    let app = serve(Config::default(), Some(&tmp.0)).await.0;
 
-    let (status, _, _) = get(&app, "/_assets/a.png", PAGE_3).await;
+    let (status, _, _) = get(
+        &app,
+        "/_assets/a.png",
+        Some("http://localhost:4321/files/docs/a.md"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "control request");
 
-    let (status, _, body) = get(&app, "/_assets/a.png", Some("http://localhost:4321/page/8")).await;
+    let (status, _, body) = get(
+        &app,
+        "/_assets/a.png",
+        Some("http://localhost:4321/files/other.md"),
+    )
+    .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body, embedded_file("404.html"));
     let (status, _, _) = get(&app, "/_assets/a.png", None).await;
@@ -547,37 +512,39 @@ async fn local_image_needs_an_existing_buffer() {
 #[tokio::test]
 async fn local_image_missing_file_is_404() {
     let tmp = TempDir::new();
-    let docs = tmp.dir("docs");
+    tmp.file("docs/a.md", b"# a");
     tmp.file("docs/a.png", b"png bytes");
-    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
-    let (status, _, _) = get(&app, "/_assets/a.png", PAGE_3).await;
+    let app = serve(Config::default(), Some(&tmp.0)).await.0;
+    let referer = Some("http://localhost:4321/files/docs/a.md");
+    let (status, _, _) = get(&app, "/_assets/a.png", referer).await;
     assert_eq!(status, StatusCode::OK, "control request");
-    let (status, _, body) = get(&app, "/_assets/b.png", PAGE_3).await;
+    let (status, _, body) = get(&app, "/_assets/b.png", referer).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body, embedded_file("404.html"));
     // a directory is not an image
-    let (status, _, _) = get(&app, "/_assets/.", PAGE_3).await;
+    let (status, _, _) = get(&app, "/_assets/.", referer).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
 async fn local_image_only_serves_images() {
     let tmp = TempDir::new();
-    let docs = tmp.dir("docs");
+    tmp.file("docs/a.md", b"# a");
     tmp.file("docs/a.png", b"png bytes");
     let secret = TempDir::new();
     let secret_file = secret.file("id_rsa", b"PRIVATE KEY");
-    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
+    let app = serve(Config::default(), Some(&tmp.0)).await.0;
+    let referer = Some("http://localhost:4321/files/docs/a.md");
 
-    let (status, _, _) = get(&app, "/_assets/a.png", PAGE_3).await;
+    let (status, _, _) = get(&app, "/_assets/a.png", referer).await;
     assert_eq!(status, StatusCode::OK, "control request");
 
     let path = format!("/_assets/{}", secret_file.to_string_lossy());
-    let (status, _, body) = get(&app, &path, PAGE_3).await;
+    let (status, _, body) = get(&app, &path, referer).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{path} was served");
     assert_ne!(body, b"PRIVATE KEY");
 
-    let (status, _, body) = get(&app, "/_assets//etc/passwd", PAGE_3).await;
+    let (status, _, body) = get(&app, "/_assets//etc/passwd", referer).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "/etc/passwd was served");
     assert!(!String::from_utf8_lossy(&body).contains("root:"));
 }
@@ -585,13 +552,14 @@ async fn local_image_only_serves_images() {
 #[tokio::test]
 async fn local_image_does_not_traverse_to_non_images() {
     let tmp = TempDir::new();
-    let docs = tmp.dir("project/docs");
+    tmp.file("project/docs/a.md", b"# a");
     tmp.file("project/images/a.png", b"png bytes");
     tmp.file("secret.txt", b"TOKEN=hunter2");
-    let app = test_app(Config::default(), &fake(vec![(3, docs)]));
+    let app = serve(Config::default(), Some(&tmp.0)).await.0;
+    let referer = Some("http://localhost:4321/files/project/docs/a.md");
 
     // `../images/a.png` is an ordinary markdown image link
-    let (status, _, body) = get(&app, "/_assets/../images/a.png", PAGE_3).await;
+    let (status, _, body) = get(&app, "/_assets/../images/a.png", referer).await;
     assert_eq!(status, StatusCode::OK, "control request");
     assert_eq!(body, b"png bytes");
 
@@ -599,7 +567,7 @@ async fn local_image_does_not_traverse_to_non_images() {
         "/_assets/../../secret.txt",
         "/_assets/%2E%2E%2F%2E%2E%2Fsecret.txt",
     ] {
-        let (status, _, body) = get(&app, path, PAGE_3).await;
+        let (status, _, body) = get(&app, path, referer).await;
         assert_eq!(status, StatusCode::NOT_FOUND, "{path} was served");
         assert_ne!(body, b"TOKEN=hunter2");
     }
@@ -608,24 +576,30 @@ async fn local_image_does_not_traverse_to_non_images() {
 type Ws =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// Serves `app`'s router on the port it was created with.
-async fn serve(config: Config, editor: &FakeEditor) -> Arc<App> {
+/// Serves `config` with `root` as the served root, plus its fake editor.
+async fn serve(config: Config, root: Option<&Path>) -> (Arc<App>, FakeEditor) {
+    let editor = fake();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let app = App::new(config, editor.editor.clone(), port, None);
+    let app = App::new(
+        config,
+        editor.editor.clone(),
+        port,
+        root.map(Path::to_path_buf),
+    );
     let router = router(app.clone());
     tokio::spawn(async move { axum::serve(listener, router).await });
-    app
+    (app, editor)
 }
 
-/// Connects a preview page for `bufnr` and waits for its initial content.
-async fn connect(app: &App, bufnr: i64) -> Ws {
-    let url = format!("ws://127.0.0.1:{}/ws?path=/page/{bufnr}", app.port);
+/// Connects the page at url path `page` and returns it and its initial data.
+async fn connect_page(app: &App, page: &str) -> (Ws, Value) {
+    let path = utf8_percent_encode(page, NON_ALPHANUMERIC);
+    let url = format!("ws://127.0.0.1:{}/ws?path={path}", app.port);
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
     let first = next_json(&mut ws).await.unwrap();
     assert_eq!(first["type"], "refresh_content");
-    assert_eq!(first["data"]["bufnr"], bufnr);
-    ws
+    (ws, first["data"].clone())
 }
 
 /// The next message on `ws`, or `None` once it is closed.
@@ -651,8 +625,8 @@ fn notifier(app: &Arc<App>) -> mpsc::UnboundedSender<(String, Value)> {
 }
 
 #[tokio::test]
-async fn websocket_needs_a_bufnr() {
-    let app = serve(Config::default(), &fake(vec![])).await;
+async fn websocket_needs_a_page() {
+    let (app, _) = serve(Config::default(), None).await;
     let url = format!("ws://127.0.0.1:{}/ws", app.port);
     match tokio_tungstenite::connect_async(url).await {
         Err(tungstenite::Error::Http(res)) => assert_eq!(res.status(), StatusCode::BAD_REQUEST),
@@ -662,8 +636,10 @@ async fn websocket_needs_a_bufnr() {
 
 #[tokio::test]
 async fn websocket_rejects_other_web_sites() {
-    let app = serve(Config::default(), &fake(vec![(3, PathBuf::new())])).await;
-    let url = format!("ws://127.0.0.1:{}/ws?path=/page/3", app.port);
+    let tmp = TempDir::new();
+    tmp.file("docs/a.md", b"# a");
+    let (app, _) = serve(Config::default(), Some(&tmp.0)).await;
+    let url = format!("ws://127.0.0.1:{}/ws?path=/files/docs/a.md", app.port);
     let mut req = tungstenite::client::IntoClientRequest::into_client_request(url).unwrap();
     req.headers_mut().insert(
         header::ORIGIN,
@@ -677,8 +653,10 @@ async fn websocket_rejects_other_web_sites() {
 
 #[tokio::test]
 async fn websocket_accepts_the_page_origin() {
-    let app = serve(Config::default(), &fake(vec![(3, PathBuf::new())])).await;
-    let url = format!("ws://127.0.0.1:{}/ws?path=/page/3", app.port);
+    let tmp = TempDir::new();
+    tmp.file("docs/a.md", b"# a");
+    let (app, _) = serve(Config::default(), Some(&tmp.0)).await;
+    let url = format!("ws://127.0.0.1:{}/ws?path=/files/docs/a.md", app.port);
     let mut req = tungstenite::client::IntoClientRequest::into_client_request(url).unwrap();
     let origin = format!("http://127.0.0.1:{}", app.port);
     req.headers_mut()
@@ -690,31 +668,30 @@ async fn websocket_accepts_the_page_origin() {
 #[tokio::test]
 async fn open_to_the_world_needs_the_token() {
     let tmp = TempDir::new();
-    let docs = tmp.dir("docs");
+    tmp.file("docs/a.md", b"# a");
     tmp.file("docs/a.png", b"png bytes");
-    let app = serve(
+    let (app, _) = serve(
         config_from(json!({ "mkdp_open_to_the_world": 1 })),
-        &fake(vec![(3, docs)]),
+        Some(&tmp.0),
     )
     .await;
     let token = app.token.clone();
     assert_eq!(token.len(), 32);
     assert_ne!(
         token,
-        App::new(Config::default(), app.editor.clone(), 1, None).token
+        App::new(Config::default(), fake().editor.clone(), 1, None).token
     );
 
     for path in [
-        "/page/3",
-        "/files/docs/a.png",
+        "/files/docs/a.md",
         "/",
         "/_assets/a.png",
         "/_theme/theme.css",
     ] {
-        let (status, _, body) = get(&app, path, PAGE_3).await;
+        let (status, _, body) = get(&app, path, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
         assert!(!body.contains(&b'<'), "{path} served the page");
-        let (status, _, _) = get(&app, &format!("{path}?token=wrong"), PAGE_3).await;
+        let (status, _, _) = get(&app, &format!("{path}?token=wrong"), None).await;
         assert_eq!(
             status,
             StatusCode::UNAUTHORIZED,
@@ -725,9 +702,9 @@ async fn open_to_the_world_needs_the_token() {
     let (status, _, _) = get(&app, "/404.html", None).await;
     assert_eq!(status, StatusCode::OK);
 
-    // the link the editor opens works and hands the page a cookie
+    // the link the server opens works and hands the page a cookie
     let req = Request::builder()
-        .uri(format!("/page/3?token={token}"))
+        .uri(format!("/files/docs/a.md?token={token}"))
         .body(Body::empty())
         .unwrap();
     let res = route(State(app.clone()), req).await;
@@ -748,7 +725,7 @@ async fn open_to_the_world_needs_the_token() {
     // which images and the socket then accept
     let req = Request::builder()
         .uri("/_assets/a.png")
-        .header(header::REFERER, PAGE_3.unwrap())
+        .header(header::REFERER, "http://localhost/files/docs/a.md")
         .header(
             header::COOKIE,
             format!("other=1; mkdp_token_{}={token}", app.port),
@@ -758,7 +735,7 @@ async fn open_to_the_world_needs_the_token() {
     let res = route(State(app.clone()), req).await;
     assert_eq!(res.status(), StatusCode::OK);
 
-    let url = format!("ws://127.0.0.1:{}/ws?path=/page/3", app.port);
+    let url = format!("ws://127.0.0.1:{}/ws?path=/files/docs/a.md", app.port);
     match tokio_tungstenite::connect_async(url.clone()).await {
         Err(tungstenite::Error::Http(res)) => assert_eq!(res.status(), StatusCode::UNAUTHORIZED),
         other => panic!("expected a 401, got {other:?}"),
@@ -773,143 +750,48 @@ async fn open_to_the_world_needs_the_token() {
 }
 
 #[tokio::test]
-async fn localhost_needs_no_token() {
-    let editor = fake(vec![]);
-    let app = serve(
+async fn open_file_calls_browserfunc_with_the_page_url() {
+    let tmp = TempDir::new();
+    let file = tmp.file("docs/a.md", b"# a");
+    let (app, editor) = serve(
         config_from(json!({ "mkdp_browserfunc": "OpenPreview" })),
-        &editor,
+        Some(&tmp.0),
     )
     .await;
-    let (status, _, _) = get(&app, "/page/3", None).await;
-    assert_eq!(status, StatusCode::OK);
     notifier(&app)
-        .send(("open_browser".into(), json!({ "bufnr": 2 })))
+        .send(("open_browser".into(), json!({ "path": file })))
         .unwrap();
     let opened =
         wait_for(|| Some(editor.function_calls("OpenPreview")).filter(|c| !c.is_empty())).await;
     assert_eq!(
         opened,
-        vec![vec![json!(format!("http://localhost:{}/page/2", app.port))]]
+        vec![vec![json!(format!(
+            "http://localhost:{}/files/docs/a.md",
+            app.port
+        ))]]
     );
-}
-
-#[tokio::test]
-async fn close_page_only_closes_that_buffers_pages() {
-    let editor = fake(vec![]);
-    let app = serve(Config::default(), &editor).await;
-    let mut page3 = connect(&app, 3).await;
-    let mut other3 = connect(&app, 3).await;
-    let mut page4 = connect(&app, 4).await;
-
-    let notify = notifier(&app);
-    notify
-        .send(("close_page".into(), json!([{ "bufnr": 3 }])))
-        .unwrap();
-    for page in [&mut page3, &mut other3] {
-        assert_eq!(next_json(page).await, Some(json!({ "type": "close_page" })));
-        assert_eq!(next_json(page).await, None, "page should be disconnected");
-    }
-
-    // the other buffer's page still gets updates, and nothing before them
-    notify
-        .send(("refresh_content".into(), json!({ "bufnr": 4 })))
-        .unwrap();
-    let next = next_json(&mut page4).await.unwrap();
-    assert_eq!(next["type"], "refresh_content");
-    assert_eq!(next["data"]["bufnr"], 4);
-
-    notify
-        .send(("close_page".into(), json!([{ "bufnr": 4 }])))
-        .unwrap();
-    assert_eq!(
-        next_json(&mut page4).await,
-        Some(json!({ "type": "close_page" }))
-    );
-}
-
-#[tokio::test]
-async fn close_all_pages_closes_every_page() {
-    let editor = fake(vec![]);
-    let app = serve(Config::default(), &editor).await;
-    let mut page3 = connect(&app, 3).await;
-    let mut page4 = connect(&app, 4).await;
-    app.close_all_pages().await;
-    // the editor kills the server as soon as this returns
-    assert_eq!(app.connected.load(Ordering::SeqCst), 0);
-    for page in [&mut page3, &mut page4] {
-        assert_eq!(next_json(page).await, Some(json!({ "type": "close_page" })));
-        assert_eq!(next_json(page).await, None);
-    }
-}
-
-#[tokio::test]
-async fn repeated_refreshes_are_collapsed() {
-    let editor = fake(vec![]);
-    let app = serve(Config::default(), &editor).await;
-    let mut page3 = connect(&app, 3).await;
-    let mut page4 = connect(&app, 4).await;
-    assert_eq!(editor.function_calls("mkdp#util#preview_data").len(), 2);
-
-    // queued before processing starts, so they are handled as one batch
-    let (tx, rx) = mpsc::unbounded_channel();
-    let refresh = |bufnr: i64| ("refresh_content".to_string(), json!([{ "bufnr": bufnr }]));
-    for msg in [refresh(3), refresh(3), refresh(3), refresh(4), refresh(3)] {
-        tx.send(msg).unwrap();
-    }
-    tokio::spawn(app.clone().process_notifications(rx));
-
-    let seqs = [
-        next_json(&mut page3).await.unwrap()["data"]["seq"].clone(),
-        next_json(&mut page4).await.unwrap()["data"]["seq"].clone(),
-        next_json(&mut page3).await.unwrap()["data"]["seq"].clone(),
-    ];
-    assert_eq!(seqs, [json!(3), json!(4), json!(5)]);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    let calls = editor.function_calls("mkdp#util#preview_data");
-    assert_eq!(
-        calls[2..],
-        [vec![json!(3)], vec![json!(4)], vec![json!(3)]],
-        "{calls:?}"
-    );
-}
-
-#[tokio::test]
-async fn open_browser_calls_browserfunc_with_the_page_url() {
-    let editor = fake(vec![]);
-    let app = serve(
-        config_from(json!({ "mkdp_browserfunc": "OpenPreview" })),
-        &editor,
-    )
-    .await;
-    notifier(&app)
-        .send(("open_browser".into(), json!([{ "bufnr": 7 }])))
-        .unwrap();
-    let calls =
-        wait_for(|| Some(editor.function_calls("OpenPreview")).filter(|c| !c.is_empty())).await;
-    let url = format!("http://localhost:{}/page/7", app.port);
-    assert_eq!(calls, vec![vec![json!(url)]]);
     assert!(editor.function_calls("mkdp#util#echo_url").is_empty());
 }
 
 #[tokio::test]
-async fn open_browser_uses_mkdp_open_ip_and_echoes_the_url() {
-    let editor = fake(vec![]);
-    // open_ip wins over the address picked for open_to_the_world
-    let app = serve(
+async fn open_file_uses_the_open_ip_and_echoes_the_url() {
+    let tmp = TempDir::new();
+    let file = tmp.file("docs/a.md", b"# a");
+    let (app, editor) = serve(
         config_from(json!({
             "mkdp_browserfunc": "OpenPreview",
             "mkdp_open_ip": "192.0.2.7",
             "mkdp_echo_preview_url": 1,
             "mkdp_open_to_the_world": 1,
         })),
-        &editor,
+        Some(&tmp.0),
     )
     .await;
     notifier(&app)
-        .send(("open_browser".into(), json!({ "bufnr": 2 })))
+        .send(("open_browser".into(), json!({ "path": file })))
         .unwrap();
     let url = json!(format!(
-        "http://192.0.2.7:{}/page/2?token={}",
+        "http://192.0.2.7:{}/files/docs/a.md?token={}",
         app.port, app.token
     ));
     let echoed =
@@ -920,84 +802,125 @@ async fn open_browser_uses_mkdp_open_ip_and_echoes_the_url() {
 }
 
 #[tokio::test]
-async fn combine_preview_reuses_a_connected_page() {
-    let editor = fake(vec![]);
-    let app = serve(
-        config_from(json!({ "mkdp_browserfunc": "OpenPreview", "mkdp_combine_preview": 1 })),
-        &editor,
-    )
-    .await;
+async fn close_page_only_closes_that_files_pages() {
+    let tmp = TempDir::new();
+    let a = tmp.file("docs/a.md", b"# a");
+    let b = tmp.file("docs/b.md", b"# b");
+    let (app, _) = serve(Config::default(), Some(&tmp.0)).await;
+    let (mut page1, _) = connect_page(&app, "/files/docs/a.md").await;
+    let (mut page2, _) = connect_page(&app, "/files/docs/a.md").await;
+    let (mut page3, _) = connect_page(&app, "/files/docs/b.md").await;
+
     let notify = notifier(&app);
-
-    // no page yet, so one is opened
     notify
-        .send(("open_browser".into(), json!([{ "bufnr": 3 }])))
+        .send(("close_page".into(), json!([{ "path": a }])))
         .unwrap();
-    wait_for(|| Some(()).filter(|_| !editor.function_calls("OpenPreview").is_empty())).await;
+    for page in [&mut page1, &mut page2] {
+        assert_eq!(next_json(page).await, Some(json!({ "type": "close_page" })));
+        assert_eq!(next_json(page).await, None, "page should be disconnected");
+    }
 
-    let mut page = connect(&app, 3).await;
+    // the other file's page still gets updates, and nothing before them
     notify
-        .send(("open_browser".into(), json!([{ "bufnr": 5 }])))
+        .send(("refresh_content".into(), json!({ "path": b })))
+        .unwrap();
+    let next = next_json(&mut page3).await.unwrap();
+    assert_eq!(next["type"], "refresh_content");
+    assert_eq!(next["data"]["content"][0], "# b");
+
+    notify
+        .send(("close_page".into(), json!([{ "path": b }])))
         .unwrap();
     assert_eq!(
-        next_json(&mut page).await,
-        Some(json!({ "type": "change_bufnr", "bufnr": 5, "path": "/page/5" }))
+        next_json(&mut page3).await,
+        Some(json!({ "type": "close_page" }))
     );
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(editor.function_calls("OpenPreview").len(), 1);
 }
 
-/// An nvim whose working directory is `root`, with the loaded buffers in
-/// `buffers` (bufnr, file). `mkdp#util#preview_data` answers `{"bufnr": n}`
-/// and `mkdp#util#file_preview_data` `{"file": path}`.
-fn fake_files(buffers: Vec<(i64, PathBuf)>) -> FakeEditor {
-    FakeEditor::new(move |call| {
-        let args = &call.args;
-        match call.method.as_str() {
-            "nvim_call_function" => {
-                let func_args = args[1].as_array().unwrap();
-                let file = |arg: &Value| buffers.iter().find(|(n, _)| Some(*n) == arg.as_i64());
-                match args[0].as_str().unwrap() {
-                    "mkdp#util#buffers" => Ok(buffers
-                        .iter()
-                        .map(|(n, file)| json!([n, file.to_string_lossy()]))
-                        .collect()),
-                    "bufexists" => Ok(json!(i32::from(file(&func_args[0]).is_some()))),
-                    "expand" => {
-                        let expr = func_args[0].as_str().unwrap();
-                        let found = buffers.iter().find(|(n, _)| expr == format!("#{n}:p:h"));
-                        Ok(json!(found
-                            .map(|(_, file)| file.parent().unwrap().to_string_lossy())
-                            .unwrap_or_default()))
-                    }
-                    "mkdp#util#preview_data" => Ok(json!({ "bufnr": func_args[0] })),
-                    "mkdp#util#file_preview_data" => Ok(json!({ "file": func_args[0] })),
-                    func => Ok(json!(format!("called {func}"))),
-                }
-            }
-            _ => Ok(Value::Null),
-        }
-    })
+#[tokio::test]
+async fn close_all_pages_closes_every_page() {
+    let tmp = TempDir::new();
+    tmp.file("docs/a.md", b"# a");
+    tmp.file("docs/b.md", b"# b");
+    let (app, _) = serve(Config::default(), Some(&tmp.0)).await;
+    let (mut page1, _) = connect_page(&app, "/files/docs/a.md").await;
+    let (mut page2, _) = connect_page(&app, "/files/docs/b.md").await;
+    app.close_all_pages().await;
+    assert_eq!(app.connected.load(Ordering::SeqCst), 0);
+    for page in [&mut page1, &mut page2] {
+        assert_eq!(next_json(page).await, Some(json!({ "type": "close_page" })));
+        assert_eq!(next_json(page).await, None);
+    }
 }
 
-/// Serves `editor` with `root` as the editor's working directory.
-async fn serve_root(config: Config, editor: &FakeEditor, root: &Path) -> Arc<App> {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let app = App::new(config, editor.editor.clone(), port, Some(root.into()));
-    let router = router(app.clone());
-    tokio::spawn(async move { axum::serve(listener, router).await });
-    app
+#[tokio::test]
+async fn repeated_refreshes_are_collapsed() {
+    let tmp = TempDir::new();
+    let a = tmp.file("docs/a.md", b"# a");
+    let b = tmp.file("docs/b.md", b"# b");
+    let (app, _) = serve(Config::default(), Some(&tmp.0)).await;
+    let (mut page_a, _) = connect_page(&app, "/files/docs/a.md").await;
+    let (mut page_b, _) = connect_page(&app, "/files/docs/b.md").await;
+
+    // queued before processing starts, so they are handled as one batch
+    let (tx, rx) = mpsc::unbounded_channel();
+    let refresh = |path: &Path| ("refresh_content".to_string(), json!([{ "path": path }]));
+    for msg in [
+        refresh(&a),
+        refresh(&a),
+        refresh(&a),
+        refresh(&b),
+        refresh(&a),
+    ] {
+        tx.send(msg).unwrap();
+    }
+    tokio::spawn(app.clone().process_notifications(rx));
+
+    // the three consecutive refreshes of a collapse into one
+    assert_eq!(
+        next_json(&mut page_a).await.unwrap()["data"]["content"][0],
+        "# a"
+    );
+    assert_eq!(
+        next_json(&mut page_b).await.unwrap()["data"]["content"][0],
+        "# b"
+    );
+    assert_eq!(
+        next_json(&mut page_a).await.unwrap()["data"]["content"][0],
+        "# a"
+    );
+    // and there is no fourth push for a
+    match tokio::time::timeout(Duration::from_millis(300), page_a.next()).await {
+        Err(_) => {} // nothing extra arrived
+        other => panic!("unexpected extra message: {other:?}"),
+    }
 }
 
-/// Connects the page at url path `page` and returns its initial content.
-async fn connect_page(app: &App, page: &str) -> (Ws, Value) {
-    let path = utf8_percent_encode(page, NON_ALPHANUMERIC);
-    let url = format!("ws://127.0.0.1:{}/ws?path={path}", app.port);
-    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-    let first = next_json(&mut ws).await.unwrap();
-    assert_eq!(first["type"], "refresh_content");
-    (ws, first["data"].clone())
+#[tokio::test]
+async fn files_page_reads_the_file_from_disk() {
+    let tmp = TempDir::new();
+    let file = tmp.file("docs/my file.md", b"# a\n\nsecond line");
+    let (app, editor) = serve(Config::default(), Some(&tmp.0)).await;
+
+    let (mut page, data) = connect_page(&app, "/files/docs/my%20file.md").await;
+    assert_eq!(data["content"][0], "# a");
+    assert_eq!(data["content"][2], "second line");
+    assert_eq!(data["name"], json!(file.to_string_lossy()));
+    assert_eq!(data["isActive"], 0);
+    assert_eq!(data["cursor"], json!([0, 0, 0, 0]));
+    assert!(editor
+        .function_calls("mkdp#util#file_preview_data")
+        .is_empty());
+
+    // and follows its edits
+    std::fs::write(&file, b"# changed").unwrap();
+    notifier(&app)
+        .send(("refresh_content".into(), json!([{ "path": file }])))
+        .unwrap();
+    assert_eq!(
+        next_json(&mut page).await.unwrap()["data"]["content"][0],
+        "# changed"
+    );
 }
 
 #[tokio::test]
@@ -1008,7 +931,7 @@ async fn files_urls_serve_markdown_under_the_root() {
     tmp.file("docs/pic.png", b"png bytes");
     tmp.file("notes.txt", b"not markdown");
     tmp.file(".env", b"TOKEN=hunter2");
-    let app = serve_root(Config::default(), &fake_files(vec![]), &tmp.0).await;
+    let (app, _) = serve(Config::default(), Some(&tmp.0)).await;
     let index = embedded_file("index.html");
 
     for path in ["/files/docs/a.md", "/files/docs/my%20file.md"] {
@@ -1047,8 +970,7 @@ async fn files_urls_cannot_leave_the_root() {
         std::os::unix::fs::symlink(&outside, root.join("link.md")).unwrap();
         std::os::unix::fs::symlink(tmp.0.join("outside.png"), root.join("link.png")).unwrap();
     }
-    let editor = fake_files(vec![]);
-    let app = serve_root(Config::default(), &editor, &root).await;
+    let (app, editor) = serve(Config::default(), Some(&root)).await;
 
     let (status, _, _) = get(&app, "/files/docs/a.md", None).await;
     assert_eq!(status, StatusCode::OK, "control request");
@@ -1085,84 +1007,33 @@ async fn files_urls_cannot_leave_the_root() {
 }
 
 #[tokio::test]
-async fn files_page_shows_the_buffer_of_its_file() {
-    let tmp = TempDir::new();
-    let file = tmp.file("docs/a.md", b"# a");
-    let editor = fake_files(vec![(5, file)]);
-    let app = serve_root(Config::default(), &editor, &tmp.0).await;
-
-    let (mut page, data) = connect_page(&app, "/files/docs/a.md").await;
-    assert_eq!(data, json!({ "bufnr": 5 }));
-    // and follows its edits
-    notifier(&app)
-        .send(("refresh_content".into(), json!({ "bufnr": 5 })))
-        .unwrap();
-    assert_eq!(next_json(&mut page).await.unwrap()["data"]["bufnr"], 5);
-    assert!(editor
-        .function_calls("mkdp#util#file_preview_data")
-        .is_empty());
-}
-
-#[tokio::test]
-async fn files_page_without_a_buffer_reads_the_file() {
-    let tmp = TempDir::new();
-    let file = tmp.file("docs/my file.md", b"# a");
-    let editor = fake_files(vec![]);
-    let app = serve_root(Config::default(), &editor, &tmp.0).await;
-
-    let (_page, data) = connect_page(&app, "/files/docs/my%20file.md").await;
-    let file = json!(file.to_string_lossy());
-    assert_eq!(data, json!({ "file": file }));
-    assert_eq!(
-        editor.function_calls("mkdp#util#file_preview_data"),
-        vec![vec![file]]
-    );
-}
-
-#[tokio::test]
-async fn local_image_is_relative_to_a_files_page() {
-    let tmp = TempDir::new();
-    tmp.file("docs/a.md", b"# a");
-    tmp.file("docs/img/a.png", b"png bytes");
-    let app = serve_root(Config::default(), &fake_files(vec![]), &tmp.0).await;
-    let referer = Some("http://localhost:4321/files/docs/a.md?x=1#top");
-    let (status, _, body) = get(&app, "/_assets/img/a.png", referer).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, b"png bytes");
-}
-
-#[tokio::test]
-async fn open_browser_opens_the_files_url_under_the_root() {
+async fn open_file_urls_under_and_outside_the_root() {
     let tmp = TempDir::new();
     let root = tmp.dir("root");
     let inside = tmp.file("root/docs/my file.md", b"# a");
     let outside = tmp.file("elsewhere/b.md", b"# b");
-    let editor = fake_files(vec![
-        (2, inside),
-        (3, outside),
-        (4, PathBuf::from("no such file.md")),
-    ]);
-    let app = serve_root(
+    let (app, editor) = serve(
         config_from(json!({ "mkdp_browserfunc": "OpenPreview" })),
-        &editor,
-        &root,
+        Some(&root),
     )
     .await;
     let notify = notifier(&app);
-    for bufnr in [2, 3, 4] {
-        notify
-            .send(("open_browser".into(), json!({ "bufnr": bufnr })))
-            .unwrap();
-    }
+    notify
+        .send(("open_browser".into(), json!({ "path": inside })))
+        .unwrap();
+    notify
+        .send(("open_browser".into(), json!({ "path": outside })))
+        .unwrap();
     let opened =
-        wait_for(|| Some(editor.function_calls("OpenPreview")).filter(|c| c.len() == 3)).await;
+        wait_for(|| Some(editor.function_calls("OpenPreview")).filter(|c| c.len() == 2)).await;
     let url = |path: &str| vec![json!(format!("http://localhost:{}{path}", app.port))];
     assert_eq!(
         opened,
         vec![
+            // under the root: the /files/ url
             url("/files/docs/my%20file.md"),
-            url("/page/3"),
-            url("/page/4")
+            // outside the root: the raw canonical path
+            url(&format!("{}", outside.to_string_lossy())),
         ]
     );
 }
