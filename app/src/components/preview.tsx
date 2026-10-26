@@ -22,10 +22,13 @@ interface Header {
 // how long to wait for more keystrokes before re-rendering
 const RENDER_DEBOUNCE_MS = 16;
 
-// the url path of a preview page, /files/<path>, or null
+// the url path of a preview page: /files/<path>, a raw absolute path whose
+// last segment has a markdown extension, or null
 export function pageFromUrl(): string | null {
   const path = window.location.pathname;
-  return /^\/files\/.+$/.test(path) ? path : null;
+  if (/^\/files\/.+$/.test(path)) return path;
+  const last = path.split("/").pop() ?? "";
+  return /\.(md|markdown|mkd|mdown|mkdn|mdwn)$/i.test(last) ? path : null;
 }
 
 // file name without directory and extension

@@ -23,12 +23,15 @@ describe("pageFromUrl", () => {
     ["/files/docs/my%20file.md", "/files/docs/my%20file.md"],
     ["/files/README.md?x=1#top", "/files/README.md"],
     ["/files/docs/my%20file.md#usage", "/files/docs/my%20file.md"],
+    ["/home/me/notes/ideas.md", "/home/me/notes/ideas.md"],
+    ["/home/me/my%20file.md", "/home/me/my%20file.md"],
+    ["/home/me/notes/ideas.md?x=1#top", "/home/me/notes/ideas.md"],
   ])("%s -> %s", (path, page) => {
     window.history.replaceState(null, "", path);
     expect(pageFromUrl()).toBe(page);
   });
 
-  test.each(["/", "/files/", "/files", "/page/1", "/other/3"])("%s is no preview", (path) => {
+  test.each(["/", "/files/", "/files", "/page/1", "/other/3", "/home/me/notes/ideas.txt", "/home/me/notes"])("%s is no preview", (path) => {
     window.history.replaceState(null, "", path);
     expect(pageFromUrl()).toBeNull();
   });
