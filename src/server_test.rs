@@ -842,6 +842,38 @@ async fn files_urls_cannot_leave_the_root() {
 }
 
 #[tokio::test]
+async fn raw_paths_outside_the_root_serve_the_page() {
+    let tmp = TempDir::new();
+    let root = tmp.dir("root");
+    let outside = tmp.file("elsewhere/b.md", b"# b");
+    let not_md = tmp.file("elsewhere/notes.txt", b"plain");
+    let app = serve(Config::default(), Some(&root)).await;
+    let raw = outside.to_string_lossy().into_owned();
+
+    // page: 200 with the embedded index.html body, websocket: refresh_content
+    let (status, _, body) = get(&app, &raw, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, embedded_file("index.html"));
+    let (_page, data) = connect_page(&app, &raw).await;
+    assert_eq!(data["content"][0], "# b");
+    assert_eq!(data["name"], json!(raw));
+
+    // negatives: non-markdown, missing, directory
+    for path in [
+        not_md.to_string_lossy().into_owned(),
+        tmp.0
+            .join("elsewhere/missing.md")
+            .to_string_lossy()
+            .into_owned(),
+        tmp.0.join("elsewhere").to_string_lossy().into_owned(),
+    ] {
+        let (status, _, body) = get(&app, &path, None).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(body, embedded_file("404.html"), "{path}");
+    }
+}
+
+#[tokio::test]
 async fn open_urls_under_and_outside_the_root() {
     let tmp = TempDir::new();
     let root = tmp.dir("root");

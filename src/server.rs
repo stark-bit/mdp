@@ -440,10 +440,20 @@ impl App {
         (path.starts_with(root) && path.is_file()).then_some(path)
     }
 
-    /// What the page at url path `page` shows.
+    /// What the page at url path `page` shows: a /files/ path under the
+    /// root, or a raw absolute path of an existing markdown file.
     async fn target(&self, page: &str) -> Option<Target> {
-        let path = self.resolve_file(page.strip_prefix("/files/")?)?;
-        is_markdown(&path).then_some(Target::File(path))
+        match page.strip_prefix("/files/") {
+            Some(rest) => {
+                let path = self.resolve_file(rest)?;
+                is_markdown(&path).then_some(Target::File(path))
+            }
+            None => {
+                let decoded = percent_decode_str(page).decode_utf8_lossy();
+                let path = PathBuf::from(decoded.as_ref()).canonicalize().ok()?;
+                (path.is_file() && is_markdown(&path)).then_some(Target::File(path))
+            }
+        }
     }
 }
 
@@ -479,7 +489,9 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
     let path = req.uri().path();
     let files = path.starts_with("/files/");
     let page = path == "/";
-    let private = page || files || path.starts_with("/_assets/") || path.starts_with("/_theme/");
+    let raw_page = !files && !page && app.target(path).await.is_some();
+    let private =
+        page || files || raw_page || path.starts_with("/_assets/") || path.starts_with("/_theme/");
     if private && !app.authorized(req.uri(), req.headers()) {
         return unauthorized();
     }
@@ -493,7 +505,7 @@ async fn route(State(app): State<Arc<App>>, req: Request) -> Response {
             _ => not_found(),
         };
     }
-    if page || files {
+    if page || files || raw_page {
         let mut response = embedded("index.html");
         if app.open_to_the_world {
             let cookie = format!(
