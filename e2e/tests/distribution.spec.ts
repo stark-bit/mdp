@@ -41,9 +41,9 @@ test.describe("versions", () => {
 test.describe("release assets", () => {
   test("the archives hold the binary the release workflow builds", () => {
     const workflow = read(".github/workflows/release.yml");
-    expect(workflow).toContain("cp target/${{ matrix.target }}/release/markdown-preview ${{ matrix.name }}");
+    expect(workflow).toContain("cp target/${{ matrix.target }}/release/mm ${{ matrix.name }}");
     expect(workflow).toContain("tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}");
-    expect(workflow).toContain("markdown-preview.exe ${{ matrix.name }}.exe");
+    expect(workflow).toContain("mm.exe ${{ matrix.name }}.exe");
   });
 });
 

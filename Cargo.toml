@@ -10,7 +10,7 @@ repository = "https://github.com/sammaji/markdown-preview.nvim"
 publish = false
 
 [[bin]]
-name = "markdown-preview"
+name = "mm"
 path = "src/main.rs"
 
 [dependencies]

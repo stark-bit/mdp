@@ -8,7 +8,7 @@ import type { Readable } from "node:stream";
 
 export const REPO = resolve(__dirname, "../..");
 export const EXE = process.platform === "win32" ? ".exe" : "";
-export const SERVER_BINARY = join(REPO, "target/release", `markdown-preview${EXE}`);
+export const SERVER_BINARY = join(REPO, "target/release", `mm${EXE}`);
 
 export async function waitFor<T>(
   what: string,

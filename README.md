@@ -4,7 +4,7 @@ Preview markdown files in your browser with live updates, math, diagrams and
 flexible configuration — from a single command, no editor required.
 
 ```sh
-markdown-preview README.md
+mm README.md
 ```
 
 ![animation of Markdown Preview with its own README.md](https://user-images.githubusercontent.com/5492542/47603494-28e90000-da1f-11e8-9079-30646e551e7a.gif)
@@ -42,11 +42,11 @@ Pre-built binaries are on the
 | Windows | x64           |
 
 Download the archive for your system (for example `markdown-preview-macos-arm64.tar.gz`),
-extract it and put the `markdown-preview` binary on your `PATH`:
+extract it and put the `md` binary on your `PATH`:
 
 ```sh
 tar -xzf markdown-preview-macos-arm64.tar.gz
-sudo mv markdown-preview-macos-arm64 /usr/local/bin/markdown-preview
+sudo mv markdown-preview-macos-arm64 /usr/local/bin/mm
 ```
 
 On Windows, extract `markdown-preview-win.zip` and add the folder to `PATH`.
@@ -59,7 +59,7 @@ cd markdown-preview.nvim
 cargo build --release
 ```
 
-The binary is at `target/release/markdown-preview`. This needs
+The binary is at `target/release/mm`. This needs
 [Rust](https://rustup.rs) 1.86+ and Node.js 20.9+ with pnpm or npx (Node.js is
 only needed to build the preview page, which is embedded into the binary — it
 is not needed to run it).
@@ -67,7 +67,7 @@ is not needed to run it).
 ## Quickstart
 
 ```sh
-markdown-preview README.md
+mm README.md
 ```
 
 The server prints the preview URL and opens it in your browser:
@@ -85,7 +85,7 @@ To see every feature, preview [`examples/features.md`](examples/features.md).
 ## Command-line usage
 
 ```text
-markdown-preview [flags] [files...]
+mm [flags] [files...]
 ```
 
 | Flag                | Description                                                                 |

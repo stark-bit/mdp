@@ -25,7 +25,7 @@ embedded into the binary. To skip the page build and reuse the existing
 ## Run your checkout
 
 ```sh
-./target/release/markdown-preview README.md
+./target/release/mm README.md
 ```
 
 or put the binary on your `PATH` to use it as an installed one.
@@ -90,7 +90,7 @@ and the tests, see [Testing](./testing.mdx).
 Start the server with debug logging:
 
 ```sh
-MP_LOG_LEVEL=debug MP_LOG_FILE=/tmp/mkdp.log ./target/release/markdown-preview examples/features.md
+MP_LOG_LEVEL=debug MP_LOG_FILE=/tmp/mkdp.log ./target/release/mm examples/features.md
 ```
 
 and follow the log with `tail -f /tmp/mkdp.log`. Without these variables, the

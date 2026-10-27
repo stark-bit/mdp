@@ -67,13 +67,13 @@ jobs:
       - name: package (unix)
         if: runner.os != 'Windows'
         run: |
-          cp target/${{ matrix.target }}/release/markdown-preview ${{ matrix.name }}
+          cp target/${{ matrix.target }}/release/mm ${{ matrix.name }}
           tar -czf ${{ matrix.name }}.tar.gz ${{ matrix.name }}
       - name: package (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item target/${{ matrix.target }}/release/markdown-preview.exe ${{ matrix.name }}.exe
+          Copy-Item target/${{ matrix.target }}/release/mm.exe ${{ matrix.name }}.exe
           Compress-Archive -Path ${{ matrix.name }}.exe -DestinationPath ${{ matrix.name }}.zip
       - uses: actions/upload-artifact@v6
         with:
