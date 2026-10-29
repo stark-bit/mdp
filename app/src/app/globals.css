@@ -126,6 +126,91 @@ body {
   font-size: 12px;
 }
 
+.heading-outline {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 20;
+  width: min(240px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 6px;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm, 0 2px 8px rgb(0 0 0 / 10%));
+  font-size: 12px;
+}
+
+.heading-outline-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.heading-depth {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.heading-depth input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--foreground);
+}
+
+.heading-outline-toggle {
+  display: block;
+  width: 28px;
+  height: 24px;
+  margin-left: auto;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.heading-outline ul {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.heading-outline li button {
+  width: 100%;
+  padding-top: 3px;
+  padding-right: 6px;
+  padding-bottom: 3px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.heading-outline li button:hover {
+  background: var(--accent);
+}
+
+.heading-outline .heading-tier {
+  color: var(--muted-foreground);
+  font-family: monospace;
+  font-weight: 400;
+}
+
+.heading-outline li button.current {
+  font-weight: 700;
+}
+
 .theme-toggle,
 .download-button {
   display: inline-flex;
@@ -152,6 +237,7 @@ body {
 
 .theme-toggle:focus-visible,
 .download-button:focus-visible,
+.heading-outline button:focus-visible,
 .diagram-open:focus-visible,
 .diagram-viewer-toolbar button:focus-visible {
   outline: 2px solid var(--ring);

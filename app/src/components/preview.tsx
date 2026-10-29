@@ -7,6 +7,13 @@ import { connect } from "@/lib/connection";
 import { replaceKeepingDetails } from "@/lib/details";
 import { renderDiagrams, themeColors, type Theme } from "@/lib/diagrams";
 import { exportHtml, saveHtml } from "@/lib/export-html";
+import {
+  extractHeadings,
+  filterByDepth,
+  deepestLevel,
+  parseDepth,
+  type HeadingEntry,
+} from "@/lib/heading-outline";
 import { createRenderer } from "@/lib/markdown";
 import type { UmlColors } from "@/lib/markdown/plantuml";
 import type { PreviewData, PreviewOptions, ServerMessage } from "@/lib/protocol";
@@ -73,6 +80,11 @@ export function Preview() {
   const [page, setPage] = useState<string | null>();
   const [connected, setConnected] = useState(true);
   const [header, setHeader] = useState<Header>();
+  const [headings, setHeadings] = useState<HeadingEntry[]>([]);
+  const [activeHeading, setActiveHeading] = useState("");
+  const [outlineCollapsed, setOutlineCollapsed] = useState(false);
+  // null follows the deepest heading
+  const [chosenDepth, setChosenDepth] = useState<number | null>(null);
   // server theme until the user picks one with the toggle
   const [editorTheme, setEditorTheme] = useState<Theme>();
   const [chosenTheme, setChosenTheme] = useState<Theme>();
@@ -90,6 +102,23 @@ export function Preview() {
 
   useEffect(() => setPage(pageFromUrl()), []);
 
+  // restore saved outline depth
+  useEffect(() => {
+    try {
+      setChosenDepth(parseDepth(localStorage.getItem("outline-depth")));
+    } catch {}
+  }, []);
+
+  const deepest = deepestLevel(headings);
+  const outlineDepth = Math.min(chosenDepth ?? deepest, deepest);
+
+  const changeDepth = (depth: number) => {
+    setChosenDepth(depth);
+    try {
+      localStorage.setItem("outline-depth", String(depth));
+    } catch {}
+  };
+
   const render = useCallback(async (theme: Theme) => {
     const body = bodyRef.current;
     if (!body || !md.current || source.current === undefined) return;
@@ -99,6 +128,7 @@ export function Preview() {
       body,
       md.current.render(source.current, { umlColors: umlColors() }),
     );
+    setHeadings(extractHeadings(body));
     await renderDiagrams(body, options.current, theme);
   }, []);
 
@@ -154,6 +184,26 @@ export function Preview() {
     if (header)
       document.title = header.pageTitle.replace("${name}", header.name);
   }, [header]);
+
+  useEffect(() => {
+    const updateActive = () => {
+      const threshold = window.scrollY + 120;
+      const current = [...headings]
+        .reverse()
+        .find(
+          (heading) =>
+            heading.element.getBoundingClientRect().top + window.scrollY <= threshold,
+        );
+      setActiveHeading(current?.id ?? headings[0]?.id ?? "");
+    };
+    updateActive();
+    window.addEventListener("scroll", updateActive, { passive: true });
+    window.addEventListener("resize", updateActive);
+    return () => {
+      window.removeEventListener("scroll", updateActive);
+      window.removeEventListener("resize", updateActive);
+    };
+  }, [headings]);
 
   const toggleTheme = () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -216,6 +266,59 @@ export function Preview() {
         )}
         <section className="markdown-body" ref={bodyRef} />
       </div>
+      {headings.length > 0 && (
+        <aside className="heading-outline" aria-label="Document outline">
+          <div className="heading-outline-bar">
+            {!outlineCollapsed && (
+              <label className="heading-depth">
+                <input
+                  type="range"
+                  min={1}
+                  max={deepest}
+                  step={1}
+                  value={outlineDepth}
+                  aria-label="Heading depth"
+                  onChange={(e) => changeDepth(Number(e.target.value))}
+                />
+                <span>h{outlineDepth}</span>
+              </label>
+            )}
+            <button
+              className="heading-outline-toggle"
+              type="button"
+              aria-label={
+                outlineCollapsed ? "Expand outline" : "Collapse outline"
+              }
+              aria-expanded={!outlineCollapsed}
+              onClick={() => setOutlineCollapsed(!outlineCollapsed)}
+            >
+              _
+            </button>
+          </div>
+          {!outlineCollapsed && (
+            <nav aria-label="Headings">
+              <ul>
+                {filterByDepth(headings, outlineDepth).map((heading, index) => (
+                  <li key={`${heading.id}-${index}`}>
+                    <button
+                      className={heading.id === activeHeading ? "current" : ""}
+                      type="button"
+                      onClick={() =>
+                        heading.element.scrollIntoView({ behavior: "smooth" })
+                      }
+                    >
+                      <span className="heading-tier" aria-hidden="true">
+                        {"#".repeat(heading.level)}
+                      </span>{" "}
+                      {heading.title}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </nav>
+          )}
+        </aside>
+      )}
     </main>
   );
 }
