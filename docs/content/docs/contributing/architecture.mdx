@@ -32,9 +32,9 @@ Two parts:
 | `src/opener.rs`           | Opening a URL in a browser on each system, with fallbacks (WSL).                                  |
 | `src/logger.rs`           | The log file.                                                                                    |
 | `build.rs`                | Builds `app/` into `app/out` before the server is compiled.                                       |
-| `app/src/components/`     | The page's React components: `preview.tsx` and the theme toggle.                                  |
+| `app/src/components/`     | The page's React components: `preview.tsx`, the theme toggle and download button.                 |
 | `app/src/lib/markdown/`   | The markdown-it renderer and its plugins (alerts, images, front matter, fences, KaTeX, PlantUML). |
-| `app/src/lib/`            | Diagrams, the diagram viewer, the WebSocket connection, the message types.                        |
+| `app/src/lib/`            | Diagrams, the diagram viewer, HTML export (`export-html.ts`), the WebSocket connection and message types. |
 | `app/public/_static/`     | Files served as they are: `markdown.css`, `highlight.css`, js-sequence-diagrams.                  |
 | `examples/features.md`    | A document that uses every feature.                                                               |
 

@@ -2,6 +2,7 @@
 // browser, diagrams included, plus the page's own controls.
 import { cpSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import type { Page } from "@playwright/test";
 
@@ -12,6 +13,37 @@ import { expect, preview, test, token } from "../lib/test";
 const DRAWN = { timeout: 20_000 };
 
 const body = (page: Page) => page.locator(".markdown-body");
+
+test("downloads the rendered preview as styled HTML", async ({ server, page }) => {
+  await preview(
+    server,
+    page,
+    "Download me.md",
+    "# Download proof\n\n<details open><summary>Saved state</summary><p>Kept open</p></details>\n",
+  );
+  await expect(body(page).locator("h1")).toHaveText("Download proof");
+  await page.getByRole("button", { name: "Switch to dark theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "Download HTML" }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe("Download me.html");
+  const html = readFileSync((await download.path())!, "utf8");
+  expect(html).toContain("<html lang=\"en\" class=\"dark\" data-theme=\"dark\">");
+  expect(html).toContain("<title>Download me</title>");
+  expect(html).toContain("Download proof");
+  expect(html).toMatch(/<details open(?:="")?>/);
+  expect(html).toContain(".markdown-body {");
+  expect(html).toContain("<style>");
+  expect(html).toContain("data:font/");
+  expect(html).not.toMatch(/url\(["']?(\.\.\/media|\/_next|\/_static|\/_theme)/);
+  expect(html).not.toMatch(/<header\b/i);
+  expect(html).not.toMatch(/<button\b/i);
+  expect(html).not.toMatch(/<link\b/i);
+  expect(html).not.toMatch(/<script\b/i);
+});
 
 test.describe("examples/features.md", () => {
   test.beforeEach(async ({ server, page }) => {
@@ -107,6 +139,38 @@ test.describe("examples/features.md", () => {
     await expect(images.nth(1)).toHaveAttribute("width", "104");
     expect((await images.nth(1).boundingBox())?.width).toBeCloseTo(104, 0);
     expect((await images.nth(2).boundingBox())?.width).toBeCloseTo(52, 0);
+  });
+
+  test("downloaded images and chart work offline", async ({ server, page, context }) => {
+    const canvas = body(page).locator(".chartjs canvas");
+    await expect
+      .poll(
+        () =>
+          canvas.evaluate((el: HTMLCanvasElement) =>
+            el.getContext("2d")!.getImageData(0, 0, el.width, el.height).data.some((v, i) => i % 4 === 3 && v > 0),
+          ),
+        DRAWN,
+      )
+      .toBe(true);
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("button", { name: "Download HTML" }).click(),
+    ]);
+    const htmlPath = join(server.dir, "downloaded.html");
+    await download.saveAs(htmlPath);
+    const offline = await context.newPage();
+    await offline.route(/^https?:\/\//, (route) => route.abort());
+    await offline.goto(pathToFileURL(htmlPath).href);
+
+    const localImages = offline.locator('img[alt*="markdown logo"]');
+    await expect(localImages).toHaveCount(3);
+    for (const image of await localImages.all()) {
+      await expect(image).toHaveAttribute("src", /^data:image\//);
+      await expect.poll(() => image.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+    }
+    const chart = offline.locator(".chartjs img");
+    await expect(chart).toHaveAttribute("src", /^data:image\/png;base64,/);
+    await expect.poll(() => chart.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
   });
 
   test("diagrams", async ({ page }) => {

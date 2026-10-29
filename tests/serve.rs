@@ -11,7 +11,7 @@ use futures_util::StreamExt;
 use serde_json::Value;
 use tokio_tungstenite::tungstenite;
 
-const BIN: &str = env!("CARGO_BIN_EXE_markdown-preview");
+const BIN: &str = env!("CARGO_BIN_EXE_mdp");
 const TIMEOUT: Duration = Duration::from_secs(10);
 /// Matches the server's fallback range: how many ports after `--port` it
 /// tries before giving up.

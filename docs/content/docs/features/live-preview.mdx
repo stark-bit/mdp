@@ -54,8 +54,21 @@ shown, except images, audio and video, which a page may link to.
 - The tab title is `page_title`, where `${name}` is the file name.
 - The sun or moon button in the header switches between the light and
   dark theme.
+- The download button saves the rendered page as a standalone HTML file.
 - The header says "Disconnected" when the page loses its connection to the
   server (it reconnects by itself).
 - `preview_options = { content_editable = true }` lets you edit the page to
   try out wording. The edits are not written to the file, and the next
   refresh replaces them.
+
+## Download as HTML
+
+Use the download button in the header to save the rendered preview as an
+`.html` file. It keeps the current theme, rendered diagrams and math, code
+colors, and the open or closed state of `<details>`. The page styles, fonts,
+local images, and charts are embedded in the file; the preview header and
+controls are not included.
+
+Some resources may still need a network connection. Remote images and
+PlantUML diagrams are embedded when the browser allows the fetch, but remain
+as URLs when cross-origin resource sharing (CORS) blocks it.

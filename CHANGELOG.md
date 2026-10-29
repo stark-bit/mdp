@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+#### Added
+- Download the rendered preview as a standalone HTML file, with its styles,
+  fonts, and local images embedded when the browser allows it.
+
 #### Breaking changes
 
 - The vim/Neovim plugin is gone; the preview server is now a standalone

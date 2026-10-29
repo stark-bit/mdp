@@ -6,10 +6,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { connect } from "@/lib/connection";
 import { replaceKeepingDetails } from "@/lib/details";
 import { renderDiagrams, themeColors, type Theme } from "@/lib/diagrams";
+import { exportHtml, saveHtml } from "@/lib/export-html";
 import { createRenderer } from "@/lib/markdown";
 import type { UmlColors } from "@/lib/markdown/plantuml";
 import type { PreviewData, PreviewOptions, ServerMessage } from "@/lib/protocol";
 
+import { DownloadButton } from "./download-button";
 import { ThemeToggle } from "./theme-toggle";
 
 interface Header {
@@ -160,6 +162,18 @@ export function Preview() {
     render(next);
   };
 
+  const download = async () => {
+    const body = bodyRef.current;
+    if (!body || !header) return;
+    const title = header.pageTitle.replace("${name}", header.name) || header.name;
+    const html = await exportHtml(body, {
+      title,
+      theme: theme ?? "light",
+      lang: document.documentElement.lang || "en",
+    });
+    saveHtml(`${header.name}.html`, html);
+  };
+
   if (page === null) {
     return (
       <p className="notice">
@@ -195,6 +209,7 @@ export function Preview() {
               {!connected && (
                 <span className="status">Disconnected</span>
               )}
+              <DownloadButton onDownload={download} />
               <ThemeToggle theme={theme ?? "light"} onToggle={toggleTheme} />
             </div>
           </header>

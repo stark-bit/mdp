@@ -12,6 +12,7 @@ mm README.md
 ## Features
 
 - Live updates as you edit the file, no manual reloading.
+- Download the rendered preview as a standalone HTML file ([details](https://mkdp.sammaji.com/features/live-preview#download-as-html)).
 - One self-contained binary, everything embedded: no Node.js at runtime.
 - [Math](https://mkdp.sammaji.com/features/markdown#math) with KaTeX, including chemistry via
   mhchem.

@@ -126,7 +126,8 @@ body {
   font-size: 12px;
 }
 
-.theme-toggle {
+.theme-toggle,
+.download-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -143,12 +144,14 @@ body {
     background-color 0.15s;
 }
 
-.theme-toggle:hover {
+.theme-toggle:hover,
+.download-button:hover {
   color: var(--accent-foreground);
   background: var(--accent);
 }
 
 .theme-toggle:focus-visible,
+.download-button:focus-visible,
 .diagram-open:focus-visible,
 .diagram-viewer-toolbar button:focus-visible {
   outline: 2px solid var(--ring);
